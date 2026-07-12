@@ -4,6 +4,16 @@ A small, local-first Windows/macOS utility for archiving a few Taoguba articles 
 
 This repository is standalone. It has no dependency on StockVault, Obsidian or any private knowledge-base layout.
 
+> [!IMPORTANT]
+> **重要声明：本项目仅供个人学习、研究和技术交流使用。** 本项目不是淘股吧内容的权利人，
+> 也不授予用户对淘股吧文章、图片或其他内容的任何版权或传播许可。
+>
+> - 用户仅应处理自己有权访问、复制和保存的内容，并自行遵守淘股吧的服务规则、著作权法及其他适用法律。
+> - 未经权利人许可或法律明确允许，请勿将通过本项目获得的内容向公众发布、传播、出售、再分发或用于商业用途。
+> - 用户应对其输入、归档、使用和传播的内容及由此产生的后果自行负责；项目作者不为用户的违规使用提供授权或背书。
+>
+> 本声明不构成法律意见，也不排除适用法律规定的责任。若对具体使用场景存在疑问，请先取得权利人许可或咨询专业人士。
+
 > Status: pre-alpha local-first application. Core archival, additive HTML/Markdown export and the
 > local browser workspace are implemented.
 
@@ -196,4 +206,4 @@ taoguba-archiver-web --help
 
 ## License
 
-No open-source license has been selected yet. Choose one before public GitHub release.
+This project is licensed under the [MIT License](LICENSE).

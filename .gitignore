@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Environments and builds
+.venv/
+venv/
+build/
+dist/
+*.spec
+
+# Application-local state
+exports/
+.taoguba-archiver/
+*.log
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Secrets and signing material
+.env
+*.p12
+*.pfx
+*.mobileprovision

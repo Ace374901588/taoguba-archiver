@@ -1,0 +1,102 @@
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+from taoguba_archiver.browser import BrowserFetchResult
+from taoguba_archiver.cli import main
+from taoguba_archiver.service import ArchiveBatchResult
+
+
+class FakeService:
+    instances = []
+
+    def __init__(self):
+        self.options = None
+        type(self).instances.append(self)
+
+    def archive(self, urls, options):
+        self.urls = urls
+        self.options = options
+        item = BrowserFetchResult(urls[0], options.output_dir / "archive", True)
+        return ArchiveBatchResult(items=[item])
+
+    def login(self, options):
+        self.options = options
+
+
+class CliTests(unittest.TestCase):
+    def setUp(self):
+        FakeService.instances.clear()
+
+    def test_additive_markdown_options_reach_service(self):
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch("taoguba_archiver.cli.ArchiveService", FakeService),
+        ):
+            exit_code = main(
+                [
+                    "--output-dir",
+                    temp_dir,
+                    "--markdown",
+                    "--markdown-images",
+                    "relative",
+                    "https://www.tgb.cn/a/example",
+                ]
+            )
+        self.assertEqual(exit_code, 0)
+        options = FakeService.instances[0].options
+        self.assertTrue(options.export_html)
+        self.assertTrue(options.export_markdown)
+        self.assertEqual(options.markdown_image_mode, "relative")
+
+    def test_markdown_only_disables_article_body_html(self):
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch("taoguba_archiver.cli.ArchiveService", FakeService),
+        ):
+            exit_code = main(
+                [
+                    "--output-dir",
+                    temp_dir,
+                    "--markdown",
+                    "--markdown-images",
+                    "source",
+                    "--no-html",
+                    "https://www.tgb.cn/a/example",
+                ]
+            )
+        self.assertEqual(exit_code, 0)
+        self.assertFalse(FakeService.instances[0].options.export_html)
+
+    def test_rejects_invalid_format_combinations_before_service_creation(self):
+        invalid_arguments = (
+            ["--markdown", "https://www.tgb.cn/a/example"],
+            ["--markdown-images", "relative", "https://www.tgb.cn/a/example"],
+            ["--no-html", "https://www.tgb.cn/a/example"],
+        )
+        with patch("taoguba_archiver.cli.ArchiveService", FakeService):
+            for arguments in invalid_arguments:
+                with self.subTest(arguments=arguments), self.assertRaises(SystemExit):
+                    main(arguments)
+        self.assertEqual(FakeService.instances, [])
+
+    def test_login_ignores_archive_format_requirements(self):
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch("taoguba_archiver.cli.ArchiveService", FakeService),
+        ):
+            exit_code = main(
+                [
+                    "--login",
+                    "--profile-dir",
+                    str(Path(temp_dir) / "profile"),
+                    "--no-html",
+                ]
+            )
+        self.assertEqual(exit_code, 0)
+        self.assertIsNotNone(FakeService.instances[0].options)
+
+
+if __name__ == "__main__":
+    unittest.main()

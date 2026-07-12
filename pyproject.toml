@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "taoguba-archiver"
+version = "0.1.0"
+description = "A small local archiver for explicitly selected Taoguba articles"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "beautifulsoup4>=4.12,<5",
+  "platformdirs>=4,<5",
+  "playwright>=1.50,<2",
+]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Environment :: Console",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: MacOS",
+]
+
+[project.scripts]
+taoguba-archiver = "taoguba_archiver.cli:main"
+taoguba-archiver-gui = "taoguba_archiver.gui:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.5"]
+gui = ["PySide6>=6.7,<7"]
+build = [
+  "PyInstaller>=6.10,<7",
+  "PySide6>=6.7,<7",
+  "platformdirs>=4,<5",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+taoguba_archiver = ["assets/*.svg"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100

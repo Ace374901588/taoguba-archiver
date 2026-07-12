@@ -13,6 +13,20 @@ This repository is standalone. It has no dependency on StockVault, Obsidian or a
 > - 用户应对其输入、归档、使用和传播的内容及由此产生的后果自行负责；项目作者不为用户的违规使用提供授权或背书。
 >
 > 本声明不构成法律意见，也不排除适用法律规定的责任。若对具体使用场景存在疑问，请先取得权利人许可或咨询专业人士。
+>
+> **Important notice: This project is provided solely for personal learning, research, and technical exchange.**
+> The project is not the rights holder of Taoguba content and does not grant users any copyright or permission to distribute
+> Taoguba articles, images, or other content.
+>
+> - Users must process only content they are entitled to access, copy, and retain, and must comply with Taoguba's terms of
+>   service, copyright law, and all other applicable laws.
+> - Unless the rights holder has granted permission or the law expressly allows it, do not publicly publish, distribute, sell,
+>   redistribute, or use commercially any content obtained through this project.
+> - Users are solely responsible for the content they submit, archive, use, or distribute, and for all resulting consequences.
+>   The project authors do not authorize or endorse any non-compliant use.
+>
+> This notice is not legal advice and does not exclude any liability imposed by applicable law. If you are uncertain about a
+> specific use, obtain permission from the rights holder or consult a qualified professional first.
 
 > Status: pre-alpha local-first application. Core archival, additive HTML/Markdown export and the
 > local browser workspace are implemented.

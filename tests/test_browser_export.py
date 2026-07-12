@@ -7,10 +7,13 @@ from taoguba_archiver.browser import TaogubaBrowser
 
 
 HTML = """
-<html><head><meta property="og:author" content="作者"></head><body>
+<html><head></head><body>
 <h1>导出测试</h1>
+<div class="article-data"><span class="data-userid"><a>归档作者</a></span><span>淘股吧原创 2026-07-12 09:30</span></div>
 <div id="first" class="article-text p_coten"><p>正文。</p>
-<img src="https://image.tgb.cn/picture.png" alt="图"></div>
+<img class="lazy article-image" data-original="https://image.tgb.cn/picture.png"
+     onclick="opennewimg(this)" onload="javascript:compressImg(this, 460)"
+     src="https://www.tgb.cn/placeHolder.png" src2="https://image.tgb.cn/picture_max.png" alt="图"></div>
 </body></html>
 """
 
@@ -105,6 +108,27 @@ class BrowserExportTests(unittest.TestCase):
             )
             self.assertTrue((archive / "article-body.html").is_file())
             self.assertTrue((archive / "article.md").is_file())
+            exported_html = (archive / "article-body.html").read_text(encoding="utf-8")
+            metadata = json.loads((archive / "metadata.json").read_text(encoding="utf-8"))
+            self.assertIn("<!doctype html>", exported_html)
+            self.assertIn('<html lang="zh-CN">', exported_html)
+            self.assertIn("<title>导出测试 · 淘股吧文章归档器</title>", exported_html)
+            self.assertIn('<main class="archive-page">', exported_html)
+            self.assertIn('class="archive-article"', exported_html)
+            self.assertIn("作者：归档作者", exported_html)
+            self.assertIn("发布时间：2026-07-12 09:30", exported_html)
+            self.assertIn('href="https://www.tgb.cn/a/example"', exported_html)
+            self.assertIn('@media (max-width: 640px)', exported_html)
+            self.assertIn(f'src="{metadata["assets"][0]["local_file"]}"', exported_html)
+            self.assertIn('loading="lazy"', exported_html)
+            self.assertNotIn("placeHolder.png", exported_html)
+            self.assertNotIn("data-original", exported_html)
+            self.assertNotIn("src2=", exported_html)
+            self.assertNotIn("onclick=", exported_html)
+            self.assertNotIn("onload=", exported_html)
+            exported_markdown = (archive / "article.md").read_text(encoding="utf-8")
+            self.assertIn("- 作者：归档作者", exported_markdown)
+            self.assertIn("- 发布时间：2026-07-12 09:30", exported_markdown)
 
 
 if __name__ == "__main__":

@@ -60,7 +60,7 @@ ProgressCallback = Callable[[ArchiveProgress], None]
 
 
 class ArchiveService:
-    """CLI/GUI-neutral entry point for login and explicit-URL archival."""
+    """CLI/Web-neutral entry point for login and explicit-URL archival."""
 
     def __init__(self, browser_factory=TaogubaBrowser) -> None:
         self._browser_factory = browser_factory

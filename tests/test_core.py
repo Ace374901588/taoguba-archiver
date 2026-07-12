@@ -75,6 +75,22 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(article.image_urls, ["https://image.tgb.cn/example.jpg"])
         self.assertFalse(article.login_required)
 
+    def test_extracts_author_and_published_time_from_current_article_header(self):
+        article = parse_article(
+            """
+            <div id="stockTitle">新版页面文章</div>
+            <div class="article-data">
+              <span class="data-userid"><a href="/blog/123">当前作者</a></span>
+              <span>淘股吧原创&nbsp;2026-07-12 09:30&nbsp;</span>
+            </div>
+            <div id="first" class="article-text p_coten"><p>正文。</p></div>
+            """,
+            "https://www.tgb.cn/a/example",
+        )
+
+        self.assertEqual(article.author, "当前作者")
+        self.assertEqual(article.published_at, "2026-07-12 09:30")
+
     def test_can_optionally_include_author_replies(self):
         article = parse_article(
             ARTICLE_HTML,

@@ -1,7 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Archive box with download arrow">
-  <rect width="128" height="128" rx="26" fill="#2563EB"/>
-  <path d="M31 57h66v42a9 9 0 0 1-9 9H40a9 9 0 0 1-9-9V57Z" fill="#FFFFFF" opacity=".96"/>
-  <path d="M26 42a9 9 0 0 1 9-9h58a9 9 0 0 1 9 9v14H26V42Z" fill="#DBEAFE"/>
-  <path d="M64 18v52m0 0L48 54m16 16 16-16" fill="none" stroke="#1E3A8A" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M51 83h26" fill="none" stroke="#2563EB" stroke-width="8" stroke-linecap="round"/>
-</svg>

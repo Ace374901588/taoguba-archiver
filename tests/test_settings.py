@@ -6,7 +6,7 @@ from taoguba_archiver.settings import AppSettings, SettingsStore
 
 
 class SettingsTests(unittest.TestCase):
-    def test_round_trips_non_sensitive_gui_preferences(self):
+    def test_round_trips_non_sensitive_workspace_preferences(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             store = SettingsStore(Path(temp_dir) / "settings.json")
             settings = AppSettings(

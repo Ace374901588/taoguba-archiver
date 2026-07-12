@@ -83,6 +83,18 @@ def parse_article(
         'meta[property="article:published_time"]',
         'meta[name="publishdate"]',
     )
+    article_data = soup.select_one(".article-data")
+    if not author:
+        author = _clean_text(
+            soup.select_one(".article-data .data-userid a, .article-data .data-userid")
+        ) or None
+    if not published_at and article_data is not None:
+        date_match = re.search(
+            r"\b20\d{2}[-/]\d{1,2}[-/]\d{1,2}\s+\d{1,2}:\d{2}(?::\d{2})?\b",
+            _clean_text(article_data),
+        )
+        if date_match:
+            published_at = date_match.group(0)
 
     main = soup.select_one("#first, .article-text.p_coten")
     main_text = _clean_text(main)

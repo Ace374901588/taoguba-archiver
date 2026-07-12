@@ -172,7 +172,7 @@ class TaogubaBrowser:
             from playwright.sync_api import sync_playwright
         except ImportError as exc:
             raise RuntimeError(
-                "缺少 Playwright，请先执行：python -m pip install -r tools/taoguba_fetcher/requirements.txt"
+                "缺少 Playwright，请先执行：python -m pip install -e \".[dev]\""
             ) from exc
 
         manager = sync_playwright().start()

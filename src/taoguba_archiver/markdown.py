@@ -13,6 +13,27 @@ from .core import ParsedArticle
 IMAGE_MODES = {"relative", "source", "embed"}
 
 
+def _render_emphasis(content: str, marker: str) -> str:
+    """Keep Markdown emphasis within a line and outside paired punctuation."""
+    ends_with_line_break = bool(re.search(r"\n\s*$", content))
+    lines = content.strip().splitlines()
+    rendered = "\n".join(
+        _render_emphasis_line(line.strip(), marker) if line.strip() else "" for line in lines
+    )
+    return f"{rendered}\n\n" if ends_with_line_break else rendered
+
+
+def _render_emphasis_line(text: str, marker: str) -> str:
+    for opening, closing in (("“", "”"), ("‘", "’"), ('"', '"'), ("'", "'")):
+        if text.startswith(opening) and text.endswith(closing) and len(text) > len(opening) + len(closing):
+            return f"{opening}{marker}{text[len(opening):-len(closing)]}{marker}{closing}"
+    link_match = re.fullmatch(r"\[([^]]+)\]\((.+)\)([：:，,。！？!?；;、]*)", text)
+    if link_match:
+        label, url, punctuation = link_match.groups()
+        return f"[{marker}{label}{marker}]({url}){punctuation}"
+    return f"{marker}{text}{marker}"
+
+
 class _MarkdownRenderer:
     def __init__(
         self, page_url: str, assets: list[dict], image_mode: str, archive_dir: Path | None
@@ -49,9 +70,10 @@ class _MarkdownRenderer:
         if name in {"script", "style", "noscript"}:
             return ""
         if name in {"strong", "b"}:
-            return f"**{self.render_children(node).strip()}**"
+            content = self.render_children(node)
+            return _render_emphasis(content, "**")
         if name in {"em", "i"}:
-            return f"*{self.render_children(node).strip()}*"
+            return _render_emphasis(self.render_children(node), "*")
         if name == "a":
             label = self.render_children(node).strip()
             href = urljoin(self.page_url, str(node.get("href") or ""))
@@ -102,7 +124,6 @@ def render_article_markdown(
     soup = BeautifulSoup(article.main_html, "html.parser")
     renderer = _MarkdownRenderer(page_url, assets, image_mode, archive_dir)
     body = "".join(renderer.render(child) for child in soup.contents)
-    body = re.sub(r"[ \t]+\n", "\n", body)
     body = re.sub(r"\n{3,}", "\n\n", body).strip()
 
     header = [f"# {article.title}"]

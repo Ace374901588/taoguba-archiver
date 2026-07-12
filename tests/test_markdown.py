@@ -12,6 +12,11 @@ HTML = """
   <div id="first" class="article-text p_coten">
     <h2>小节</h2>
     <p>正文有<strong>重点</strong>和<a href="/a/linked">链接</a>。</p>
+    <p>第一行<br>第二行</p>
+    <p>原文强调<b>“先跌先止跌”</b>。</p>
+    <b>前置粗体<br><br>（4）涨价更新催化：<br></b>光纤终归是因为预期太高。
+    <p><b><a href="/new/stockbar/barRedirect?stockName=浪潮信息">浪潮信息</a>：</b>一字首开。</p>
+    <p><b>雅克科技/广钢气体</b>今天开盘就不是强势。</p>
     <blockquote>引用内容</blockquote>
     <ul><li>项目一</li><li>项目二</li></ul>
     <img data-original="//image.tgb.cn/example.png" alt="示例图">
@@ -37,8 +42,18 @@ class MarkdownTests(unittest.TestCase):
 
         self.assertIn("# 测试标题", markdown)
         self.assertIn("## 小节", markdown)
-        self.assertIn("**重点**", markdown)
+        self.assertIn("**重点**和", markdown)
+        self.assertIn("“**先跌先止跌**”", markdown)
+        self.assertNotIn("**“先跌先止跌”**", markdown)
+        self.assertIn("**前置粗体**\n\n**（4）涨价更新催化：**\n\n光纤终归", markdown)
+        self.assertIn(
+            "[**浪潮信息**](https://www.tgb.cn/new/stockbar/barRedirect?stockName=浪潮信息)：一字首开。",
+            markdown,
+        )
+        self.assertIn("**雅克科技/广钢气体**今天开盘就不是强势。", markdown)
+        self.assertNotIn("<strong>", markdown)
         self.assertIn("[链接](https://www.tgb.cn/a/linked)", markdown)
+        self.assertIn("第一行  \n第二行", markdown)
         self.assertIn("> 引用内容", markdown)
         self.assertIn("- 项目一", markdown)
         self.assertIn("![示例图](images/example.png)", markdown)

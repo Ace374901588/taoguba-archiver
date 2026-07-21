@@ -1,59 +1,35 @@
-# Daily reply curation and standalone export
+# 每日跟帖筛选与独立导出
 
-## Goal
+## 目标
 
-Let readers remove low-value replies from a daily reply archive and download the
-remaining material as a single portable HTML file.
+让读者从每日跟帖归档中移除低价值内容，并将剩余内容下载为单个、可移植的 HTML 文件。
 
-## Automatic curation
+## 自动筛选
 
-Automatic curation runs while the daily archive is generated.  It removes only
-high-confidence low-information replies:
+每日归档生成时执行自动筛选，但只移除高置信度、低信息量的跟帖：
 
-- content that becomes empty after normalising whitespace, emoji, punctuation,
-  and common decorative symbols;
-- short acknowledgements and social fillers such as `收到`, `感谢`, `谢谢`,
-  `哈哈`, `顶`, and their punctuation-only variants;
-- an immediately adjacent duplicate of the same normalised reply text.
+- 去除空白、表情、标点和常见装饰符号后为空的内容；
+- `收到`、`感谢`、`谢谢`、`哈哈`、`顶` 等简短寒暄，以及它们仅附带标点的变体；
+- 与紧邻上一条内容标准化后完全相同的重复跟帖。
 
-The filter is conservative.  It must keep a reply when it contains a concrete
-viewpoint, a security name or code, price or market information, trading action,
-strategy, time reference, causal explanation, or anything the heuristic cannot
-classify confidently.  Automatically removed entries do not appear in the
-initial archive HTML.
+筛选必须保持保守。包含明确观点、证券名称或代码、价格或行情信息、交易动作、策略、时间参考、因果解释的跟帖必须保留；启发式规则无法高置信度判断的内容也必须保留。自动移除的条目不出现在初始归档 HTML 中。
 
-## Review controls
+## 审阅控件
 
-The archive header reports the original reply count, the automatic-filter count,
-and the current retained count.  Every retained timeline item has a delete
-control.  Deletion immediately removes the item from the reading view and
-updates the retained count.  A single undo action restores the most recently
-manually deleted item.
+归档头部展示原始跟帖数、自动筛除数和当前保留数。每条保留的时间线跟帖均提供删除控件；删除后立即从阅读视图移除，并更新保留数。一个撤销控件用于恢复最近一次手动删除。
 
-The controls only affect the open document until the reader exports it.  They
-do not modify the source archive, browser profile, or any stored login state.
+这些控件只影响当前打开的文档，直到读者执行导出；不会改动源归档、浏览器 Profile 或任何登录状态。
 
-## Final export
+## 最终导出
 
-The `下载精简 HTML` control creates a new, standalone HTML document from the
-currently visible entries.  It omits the curation controls and filtered/deleted
-items.  Images referenced by retained entries are embedded as data URLs so the
-download remains usable after being moved independently of its original
-`images/` directory.  If an image cannot be embedded, its visible image element
-remains in the final export with its existing source and export still succeeds.
+`下载精简 HTML` 控件从当前可见条目创建一份新的独立 HTML 文档。该文档不含筛选/删除控件，也不含自动筛除或手动删除的条目。保留条目引用的图片会被嵌入为 data URL，因此下载文件脱离原始 `images/` 目录后仍能独立使用。若某张图片无法嵌入，最终导出保留该可见图片元素及其原始来源，且整体导出仍然成功。
 
-## Implementation boundaries
+## 实现边界
 
-- Python owns conservative classification, metadata counts, and deterministic
-  static HTML generation.
-- Small inline JavaScript owns manual deletion, one-step undo, image embedding,
-  and browser download of the final document.
-- No new network access is introduced; the final export reads only images that
-  belong to the already generated local archive.
+- Python 负责保守分类、统计计数和确定性的静态 HTML 生成。
+- 小型内联 JavaScript 负责手动删除、单步撤销、图片嵌入和浏览器下载最终文档。
+- 不引入新的网络访问；最终导出只读取已生成本地归档中的图片。
 
-## Verification
+## 验证
 
-Tests cover high-confidence removal, preservation of uncertain/informative
-replies, duplicate handling, count markup, delete/undo/export hooks, and the
-absence of curation controls in the exported document template.  The complete
-unit suite, linter, and a real reply-feed CLI smoke export must pass.
+测试覆盖：高置信度筛除、保留不确定/信息性跟帖、重复跟帖处理、统计标记、删除/撤销/导出钩子，以及最终导出模板中不包含筛选控件。完成前必须通过完整单元测试、静态检查和一次真实跟帖源的 CLI 冒烟导出。

@@ -164,6 +164,7 @@ class BrowserExportTests(unittest.TestCase):
             self.assertNotIn("must-not-export", metadata_text)
             exported_html = (result.archive_dir / "shuo.html").read_text(encoding="utf-8")
             self.assertIn("只保留这一段正文。", exported_html)
+            self.assertIn("测试作者", exported_html)
             self.assertIn('src="images/', exported_html)
             self.assertNotIn("不应导出的评论。", exported_html)
             self.assertNotIn("avatar.png", exported_html)
@@ -239,6 +240,12 @@ class BrowserExportTests(unittest.TestCase):
         <a href="https://example.test/path?token=secret-link-token#secret-fragment"
            onclick="send('secret-event-token')">正文链接</a>
         <p>https://example.test/plain?token=secret-text-token#plain-fragment</p>
+        <p>token=plain-credential-value</p>
+        <p>{"accessToken":"json-access-value","csrfToken":"json-csrf-value"}</p>
+        <div data-state='{"authorization":"json-auth-value","cookie":"json-cookie-value",
+          "session":"json-session-value","secret":"json-secret-value",
+          "password":"json-password-value"}'>保留普通文字</div>
+        <a href="https://example.test/private/accessToken/path-credential-value">路径凭据</a>
         <img data-original="https://image.tgb.cn/secure.png?token=secret-image-token">
         </section></body></html>
         """
@@ -269,6 +276,14 @@ class BrowserExportTests(unittest.TestCase):
                 for filename in ("response.html", "rendered.html", "shuo.html", "metadata.json")
             )
             for secret in (
+                "accessToken",
+                "csrfToken",
+                "token=",
+                "authorization",
+                "cookie",
+                "session",
+                "secret",
+                "password",
                 "secret-meta-token",
                 "secret-style-token",
                 "secret-script-cookie",
@@ -279,8 +294,52 @@ class BrowserExportTests(unittest.TestCase):
                 "secret-event-token",
                 "secret-text-token",
                 "secret-image-token",
+                "plain-credential-value",
+                "json-access-value",
+                "json-csrf-value",
+                "json-auth-value",
+                "json-cookie-value",
+                "json-session-value",
+                "json-secret-value",
+                "json-password-value",
+                "path-credential-value",
             ):
-                self.assertNotIn(secret, combined)
+                self.assertNotIn(secret.lower(), combined.lower())
+
+    def test_classifies_a_rejected_redirect_login_page_without_parsing_it(self):
+        class LoginRedirectPage(FakePage):
+            def goto(self, url, **kwargs):
+                self.url = "https://login.tgb.cn/auth?token=redirect-login-secret"
+                return FakeResponse(url)
+
+            def content(self):
+                return """
+                <html><body><p>登录后可查看全文 token=redirect-page-secret</p>
+                <section class="shuo-content"><p>越界正文不得解析。</p>
+                <img src="https://image.tgb.cn/out-of-scope.png"></section>
+                </body></html>
+                """
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            browser = TaogubaBrowser(root / "profile", root / "exports", settle_ms=0)
+            context = ShuoContext(LoginRedirectPage())
+            browser._launch = lambda: (type("Manager", (), {"stop": lambda _self: None})(), context)
+
+            result = browser.fetch_shuo(SHUO_URL)
+
+            self.assertFalse(result.complete)
+            self.assertTrue(result.login_required)
+            self.assertIn("登录", result.incomplete_reason)
+            self.assertEqual(context.request.__dict__, {})
+            exported_html = (result.archive_dir / "shuo.html").read_text(encoding="utf-8")
+            self.assertNotIn("越界正文不得解析。", exported_html)
+            metadata = json.loads((result.archive_dir / "metadata.json").read_text(encoding="utf-8"))
+            self.assertTrue(metadata["shuo"]["login_required"])
+            self.assertNotIn(
+                "redirect-page-secret",
+                (result.archive_dir / "rendered.html").read_text(encoding="utf-8"),
+            )
 
     def test_rejects_redirected_and_non_image_shuo_assets(self):
         shuo_with_two_images = SHUO_HTML.replace(

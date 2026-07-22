@@ -8,11 +8,12 @@ from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 from html import escape
 from pathlib import Path
-from urllib.parse import urljoin, urlparse
+from urllib.parse import unquote, urljoin, urlparse
 
 from bs4 import BeautifulSoup, Comment
 
 from .core import (
+    LOGIN_MARKERS,
     allocate_archive_dir,
     article_key_from_url,
     parse_article,
@@ -109,7 +110,7 @@ def _response_bytes(response) -> bytes:
 
 
 _SENSITIVE_ATTRIBUTE_MARKERS = (
-    "auth",
+    "authorization",
     "cookie",
     "credential",
     "csrf",
@@ -154,6 +155,8 @@ def _sanitize_diagnostic_url(value: object) -> str | None:
         except ValueError:
             return None
         parsed = parsed._replace(netloc=f"{hostname}{port}")
+    if _contains_sensitive_marker(unquote(parsed.path)):
+        parsed = parsed._replace(path="/")
     return parsed._replace(query="", fragment="").geturl()
 
 
@@ -202,6 +205,10 @@ def _sanitize_diagnostic_html(html: str) -> str:
             ):
                 tag.attrs.pop(attribute, None)
                 continue
+            attribute_value = tag.attrs[attribute]
+            if _contains_sensitive_marker(attribute_value):
+                tag.attrs.pop(attribute, None)
+                continue
             if lowered == "srcset":
                 tag.attrs.pop(attribute, None)
                 continue
@@ -213,9 +220,17 @@ def _sanitize_diagnostic_html(html: str) -> str:
                     tag.attrs.pop(attribute, None)
     for text_node in soup.find_all(string=True):
         sanitized = _sanitize_urls_in_text(str(text_node))
+        if _contains_sensitive_marker(sanitized):
+            login_markers = [marker for marker in LOGIN_MARKERS if marker in sanitized]
+            sanitized = " ".join(login_markers) or "[redacted]"
         if sanitized != str(text_node):
             text_node.replace_with(sanitized)
     return str(soup)
+
+
+def _diagnostic_has_login_marker(html: str) -> bool:
+    page_text = BeautifulSoup(html, "html.parser").get_text(" ", strip=True)
+    return any(marker in page_text for marker in LOGIN_MARKERS)
 
 
 def _is_expected_shuo_final_url(final_url: object, expected_url: str) -> bool:
@@ -472,6 +487,11 @@ class TaogubaBrowser:
                 safe_rendered_html if final_url_in_scope else "",
                 normalized_url,
             )
+            login_required = content.login_required or _diagnostic_has_login_marker(
+                safe_rendered_html
+            )
+            if login_required != content.login_required:
+                content = replace(content, login_required=login_required)
 
             archive_dir = allocate_archive_dir(
                 self.output_dir,
@@ -540,7 +560,7 @@ class TaogubaBrowser:
                 reasons.append("最终页面 URL 超出允许的说说范围")
             if navigation_error is None and not http_ok:
                 reasons.append(f"HTTP {status_code if status_code is not None else '未知状态'}")
-            if content.login_required:
+            if login_required:
                 reasons.append("页面提示登录后查看全文")
             if not content.body_text:
                 reasons.append("未找到说说正文或正文为空")
@@ -571,7 +591,7 @@ class TaogubaBrowser:
                 archive_dir=archive_dir,
                 complete=complete,
                 incomplete_reason=incomplete_reason,
-                login_required=content.login_required,
+                login_required=login_required,
             )
         finally:
             context.close()

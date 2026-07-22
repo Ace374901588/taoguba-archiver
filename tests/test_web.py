@@ -31,6 +31,22 @@ class FakeService:
             },
         )()
 
+    def archive_shuo(self, shuo_url, options):
+        self.shuo_url = shuo_url
+        self.shuo_thread = threading.current_thread()
+        complete = getattr(self, "shuo_complete", True)
+        return type(
+            "ShuoResult",
+            (),
+            {
+                "url": shuo_url,
+                "archive_dir": options.output_dir / "shuo-archive",
+                "complete": complete,
+                "incomplete_reason": None if complete else "页面拒绝访问",
+                "login_required": getattr(self, "shuo_login_required", False),
+            },
+        )()
+
 
 class WebAppTests(unittest.TestCase):
     def test_project_exposes_only_cli_and_browser_application_entries(self):
@@ -160,6 +176,81 @@ class WebAppTests(unittest.TestCase):
         self.assertIn("开始整理最新跟帖：2026-07-21", messages)
         self.assertIn("最新跟帖整理完成：共 2 条", messages)
 
+    def test_archives_one_explicit_shuo_url_in_a_background_worker(self):
+        self.app.update_settings(
+            {
+                "output_dir": str(Path(self.temp_dir.name) / "exports"),
+                "export_html": True,
+                "export_markdown": False,
+                "markdown_image_mode": None,
+                "include_author_replies": False,
+            }
+        )
+        shuo_url = (
+            "https://shuo.tgb.cn/shuo/toViewShuo?"
+            "shuoID=2079570335635705862"
+        )
+
+        self.app.start_shuo(shuo_url)
+        self.app.wait_for_idle(timeout=1)
+
+        messages = [event["message"] for event in self.app.state()["events"]]
+        self.assertIn("开始归档说说", messages)
+        self.assertIn(
+            f"说说归档完成：{Path(self.temp_dir.name) / 'exports' / 'shuo-archive'}",
+            messages,
+        )
+        self.assertEqual(self.app.service.shuo_url, shuo_url)
+        self.assertIsNot(self.app.service.shuo_thread, threading.current_thread())
+
+    def test_shuo_rejects_a_non_shuo_url_before_starting_a_worker(self):
+        self.app.update_settings(
+            {
+                "output_dir": str(Path(self.temp_dir.name) / "exports"),
+                "export_html": True,
+                "export_markdown": False,
+                "markdown_image_mode": None,
+                "include_author_replies": False,
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "shuo.tgb.cn"):
+            self.app.start_shuo("https://www.tgb.cn/a/example")
+
+        self.assertIsNone(self.app._worker)
+
+    def test_shuo_changes_login_state_only_when_login_is_required(self):
+        self.app.update_settings(
+            {
+                "output_dir": str(Path(self.temp_dir.name) / "exports"),
+                "export_html": True,
+                "export_markdown": False,
+                "markdown_image_mode": None,
+                "include_author_replies": False,
+            }
+        )
+        shuo_url = (
+            "https://shuo.tgb.cn/shuo/toViewShuo?"
+            "shuoID=2079570335635705862"
+        )
+        self.app.service.shuo_complete = False
+
+        self.app.start_shuo(shuo_url)
+        self.app.wait_for_idle(timeout=1)
+
+        state = self.app.state()
+        self.assertEqual(state["login_status"], "未登录")
+        self.assertIn(
+            "说说归档不完整：页面拒绝访问",
+            [event["message"] for event in state["events"]],
+        )
+
+        self.app.service.shuo_login_required = True
+        self.app.start_shuo(shuo_url)
+        self.app.wait_for_idle(timeout=1)
+
+        self.assertEqual(self.app.state()["login_status"], "登录失效；请重新登录")
+
     def test_local_server_serves_browser_workspace_on_loopback(self):
         server = serve(port=0, open_browser=False)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -170,8 +261,10 @@ class WebAppTests(unittest.TestCase):
             self.assertIn("淘股吧文章归档器", page)
             self.assertIn("/api/archive", page)
             self.assertIn("/api/latest-replies", page)
+            self.assertIn("/api/shuo", page)
             self.assertIn('id="replyFeed"', page)
             self.assertIn('id="replyDate" type="date"', page)
+            self.assertIn('id="shuoUrl"', page)
             self.assertIn('class="app-shell"', page)
             self.assertIn('aria-live="polite"', page)
             self.assertIn('id="selectOutput"', page)

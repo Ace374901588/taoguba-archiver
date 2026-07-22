@@ -28,6 +28,7 @@ from .daily_replies import (
     validate_reply_feed_url,
 )
 from .markdown import render_article_markdown
+from .shuo import parse_shuo, render_shuo_html, validate_shuo_url
 
 
 SAFE_RESPONSE_HEADERS = {
@@ -61,6 +62,15 @@ class DailyReplyFetchResult:
     archive_dir: Path
     complete: bool
     reply_count: int
+    incomplete_reason: str | None = None
+    login_required: bool = False
+
+
+@dataclass(frozen=True)
+class ShuoFetchResult:
+    url: str
+    archive_dir: Path
+    complete: bool
     incomplete_reason: str | None = None
     login_required: bool = False
 
@@ -274,6 +284,123 @@ class TaogubaBrowser:
             context.close()
             manager.stop()
         return BrowserBatchResult(items=items, cancelled=cancelled)
+
+    def fetch_shuo(self, shuo_url: str) -> ShuoFetchResult:
+        """Export exactly one explicitly supplied shuo page and its body images."""
+        normalized_url = validate_shuo_url(shuo_url)
+        if self.headless:
+            raise ValueError("说说导出需要使用可见浏览器窗口")
+
+        manager, context = self._launch()
+        try:
+            page = context.pages[0] if context.pages else context.new_page()
+            fetched_at = datetime.now().astimezone()
+            response = page.goto(
+                normalized_url,
+                wait_until="domcontentloaded",
+                timeout=self.timeout_ms,
+            )
+            try:
+                page.wait_for_selector(
+                    ".shuo-content", timeout=min(self.timeout_ms, 10_000)
+                )
+            except Exception:
+                pass
+            if self.settle_ms:
+                page.wait_for_timeout(self.settle_ms)
+
+            raw_bytes = _response_bytes(response)
+            status_code = getattr(response, "status", None)
+            response_headers = _safe_response_headers(response)
+            rendered_html = page.content()
+            rendered_bytes = rendered_html.encode("utf-8")
+            content = parse_shuo(rendered_html, page.url)
+
+            archive_dir = allocate_archive_dir(
+                self.output_dir,
+                "shuo",
+                content.title,
+                fetched_at.strftime("%Y-%m-%d-%H%M%S"),
+            )
+            assets_dir = archive_dir / "images"
+            assets_dir.mkdir(parents=True, exist_ok=False)
+            (archive_dir / "response.html").write_bytes(raw_bytes)
+            (archive_dir / "rendered.html").write_bytes(rendered_bytes)
+
+            local_images: dict[str, str] = {}
+            asset_manifest = []
+            for index, image_url in enumerate(content.image_urls, 1):
+                record = {
+                    "source_url": image_url,
+                    "kind": "content",
+                    "local_file": None,
+                    "error": None,
+                }
+                try:
+                    image_response = context.request.get(
+                        image_url, timeout=self.timeout_ms
+                    )
+                    if not image_response.ok:
+                        raise RuntimeError(f"HTTP {image_response.status}")
+                    content_type = image_response.headers.get("content-type")
+                    image_bytes = image_response.body()
+                    filename = _asset_name(image_url, content_type, index)
+                    (assets_dir / filename).write_bytes(image_bytes)
+                    local_file = f"images/{filename}"
+                    local_images[image_url] = local_file
+                    record.update(
+                        local_file=local_file,
+                        content_type=content_type,
+                        size=len(image_bytes),
+                        sha256=_sha256(image_bytes),
+                    )
+                except Exception as exc:
+                    record["error"] = str(exc)
+                asset_manifest.append(record)
+
+            output_html = render_shuo_html(content, local_images, page.url)
+            (archive_dir / "shuo.html").write_text(output_html, encoding="utf-8")
+
+            reasons = []
+            http_ok = status_code is not None and 200 <= status_code < 400
+            if not http_ok:
+                reasons.append(f"HTTP {status_code if status_code is not None else '未知状态'}")
+            if content.login_required:
+                reasons.append("页面提示登录后查看全文")
+            if not content.body_text:
+                reasons.append("未找到说说正文或正文为空")
+            incomplete_reason = "；".join(reasons) or None
+            complete = incomplete_reason is None
+            metadata = {
+                "schema_version": 1,
+                "source": "淘股吧",
+                "source_type": "shuo",
+                "source_url": normalized_url,
+                "final_url": page.url,
+                "fetched_at": fetched_at.isoformat(),
+                "status": "complete" if complete else "incomplete",
+                "incomplete_reason": incomplete_reason,
+                "http_status": status_code,
+                "response_headers": response_headers,
+                "response_sha256": _sha256(raw_bytes),
+                "rendered_sha256": _sha256(rendered_bytes),
+                "shuo": asdict(content),
+                "assets": asset_manifest,
+            }
+            (archive_dir / "metadata.json").write_text(
+                json.dumps(metadata, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            return ShuoFetchResult(
+                url=normalized_url,
+                archive_dir=archive_dir,
+                complete=complete,
+                incomplete_reason=incomplete_reason,
+                login_required=content.login_required,
+            )
+        finally:
+            context.close()
+            manager.stop()
 
     def fetch_latest_replies(self, feed_url: str, target_date: str) -> DailyReplyFetchResult:
         """Export one explicitly supplied user's latest replies for one calendar date.

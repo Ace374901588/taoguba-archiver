@@ -17,6 +17,23 @@ HTML = """
 </body></html>
 """
 
+SHUO_HTML = """
+<html><head></head><body>
+<aside><img src="https://image.tgb.cn/avatar.png" alt="头像"></aside>
+<main class="shuo-detail">
+<h1 class="shuo-title">盘前记录</h1>
+<div class="shuo-meta"><a class="shuo-author">测试作者</a>
+<time class="shuo-time">2026-07-23 09:30</time></div>
+<section class="shuo-content"><p>只保留这一段正文。</p>
+<img data-original="https://image.tgb.cn/shuo-content.png"
+     src="https://www.tgb.cn/placeHolder.png" alt="正文图"></section>
+</main>
+<section class="comments">不应导出的评论。</section>
+</body></html>
+"""
+
+SHUO_URL = "https://shuo.tgb.cn/shuo/toViewShuo?shuoID=2079570335635705862"
+
 LATEST_REPLIES_HTML = """
 <html><body><h1>测试作者的博客</h1><section class="reply-item">
 <span>2026-07-21 22:16 跟帖了</span><span>来自：《<a href="/a/article-one">测试主帖</a>》</span>
@@ -59,9 +76,11 @@ class FakeContext:
 
 
 class FakePage:
-    url = "https://www.tgb.cn/a/example"
+    def __init__(self):
+        self.url = "https://www.tgb.cn/a/example"
 
-    def goto(self, _url, **_kwargs):
+    def goto(self, url, **_kwargs):
+        self.url = url
         return FakeResponse()
 
     def wait_for_selector(self, *_args, **_kwargs):
@@ -71,7 +90,20 @@ class FakePage:
         return None
 
     def content(self):
-        return HTML
+        return SHUO_HTML if self.url.startswith("https://shuo.tgb.cn/") else HTML
+
+
+class ShuoContext(FakeContext):
+    def __init__(self, page=None):
+        super().__init__()
+        self.pages = []
+        self.page = page or FakePage()
+
+    def new_page(self):
+        return self.page
+
+    def close(self):
+        return None
 
 
 class LatestRepliesPage:
@@ -108,6 +140,60 @@ class LatestRepliesContext(FakeContext):
 
 
 class BrowserExportTests(unittest.TestCase):
+    def test_exports_one_shuo_with_diagnostics(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            browser = TaogubaBrowser(root / "profile", root / "exports", settle_ms=0)
+            context = ShuoContext()
+            browser._launch = lambda: (type("Manager", (), {"stop": lambda _self: None})(), context)
+
+            result = browser.fetch_shuo(SHUO_URL)
+
+            self.assertTrue(result.complete)
+            self.assertEqual(result.url, SHUO_URL)
+            for relative_path in ("shuo.html", "response.html", "rendered.html", "images"):
+                self.assertTrue((result.archive_dir / relative_path).exists())
+            metadata_text = (result.archive_dir / "metadata.json").read_text(encoding="utf-8")
+            metadata = json.loads(metadata_text)
+            self.assertEqual(metadata["source_type"], "shuo")
+            self.assertEqual(len(metadata["assets"]), 1)
+            self.assertNotIn("set-cookie", metadata_text.lower())
+            self.assertNotIn("must-not-export", metadata_text)
+            exported_html = (result.archive_dir / "shuo.html").read_text(encoding="utf-8")
+            self.assertIn("只保留这一段正文。", exported_html)
+            self.assertIn('src="images/', exported_html)
+            self.assertNotIn("不应导出的评论。", exported_html)
+            self.assertNotIn("avatar.png", exported_html)
+
+    def test_marks_a_failed_shuo_response_incomplete_and_keeps_diagnostics(self):
+        class BadResponse(FakeResponse):
+            status = 502
+            ok = False
+
+            def body(self):
+                return b"bad gateway"
+
+        class BadShuoPage(FakePage):
+            def goto(self, url, **kwargs):
+                self.url = url
+                return BadResponse()
+
+            def content(self):
+                return "<html><title>502 Bad Gateway</title><body>Bad Gateway</body></html>"
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            browser = TaogubaBrowser(root / "profile", root / "exports", settle_ms=0)
+            context = ShuoContext(BadShuoPage())
+            browser._launch = lambda: (type("Manager", (), {"stop": lambda _self: None})(), context)
+
+            result = browser.fetch_shuo(SHUO_URL)
+
+            self.assertFalse(result.complete)
+            self.assertIn("HTTP 502", result.incomplete_reason)
+            self.assertTrue((result.archive_dir / "response.html").is_file())
+            self.assertTrue((result.archive_dir / "rendered.html").is_file())
+
     def test_exports_explicit_latest_replies_as_a_portable_daily_html(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

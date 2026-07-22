@@ -80,6 +80,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--shuo 不能与文章 URL 或 --urls-file 同时使用")
     if args.shuo and args.reply_feed:
         parser.error("--shuo 不能与 --reply-feed 同时使用")
+    if args.shuo and args.reply_date:
+        parser.error("--shuo 不能与 --reply-date 同时使用")
     if args.shuo and args.headless:
         parser.error("--shuo 需要有界面 Chrome；淘股吧会拒绝无界面请求")
     if args.shuo and (args.markdown or args.markdown_images or args.no_html):

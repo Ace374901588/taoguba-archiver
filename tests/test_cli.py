@@ -182,6 +182,7 @@ class CliTests(unittest.TestCase):
                 "--shuo",
                 shuo_url,
             ],
+            ["--shuo", shuo_url, "--reply-date", "2026-07-21"],
             ["--markdown", "--markdown-images", "relative", "--shuo", shuo_url],
             ["--markdown", "--markdown-images", "relative", "--no-html", "--shuo", shuo_url],
         )

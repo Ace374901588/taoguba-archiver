@@ -24,6 +24,21 @@ class FakeService:
     def login(self, options):
         self.options = options
 
+    def collect_latest_replies(self, feed_url, target_date, options):
+        self.feed_url = feed_url
+        self.target_date = target_date
+        self.options = options
+        return type(
+            "DailyResult",
+            (),
+            {
+                "archive_dir": options.output_dir / "daily-replies",
+                "reply_count": 3,
+                "complete": True,
+                "incomplete_reason": None,
+            },
+        )()
+
 
 class CliTests(unittest.TestCase):
     def setUp(self):
@@ -96,6 +111,40 @@ class CliTests(unittest.TestCase):
             )
         self.assertEqual(exit_code, 0)
         self.assertIsNotNone(FakeService.instances[0].options)
+
+    def test_collects_an_explicit_latest_reply_feed_for_one_date(self):
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch("taoguba_archiver.cli.ArchiveService", FakeService),
+        ):
+            exit_code = main(
+                [
+                    "--output-dir",
+                    temp_dir,
+                    "--reply-feed",
+                    "https://www.tgb.cn/user/blog/moreReplyMod?userID=6671396",
+                    "--reply-date",
+                    "2026-07-21",
+                ]
+            )
+        self.assertEqual(exit_code, 0)
+        service = FakeService.instances[0]
+        self.assertEqual(service.target_date, "2026-07-21")
+        self.assertIn("moreReplyMod", service.feed_url)
+
+    def test_rejects_headless_latest_reply_collection(self):
+        with patch("taoguba_archiver.cli.ArchiveService", FakeService):
+            with self.assertRaises(SystemExit):
+                main(
+                    [
+                        "--headless",
+                        "--reply-feed",
+                        "https://www.tgb.cn/user/blog/moreReplyMod?userID=6671396",
+                        "--reply-date",
+                        "2026-07-21",
+                    ]
+                )
+        self.assertEqual(FakeService.instances, [])
 
 
 if __name__ == "__main__":

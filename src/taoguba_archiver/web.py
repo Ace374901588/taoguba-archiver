@@ -14,6 +14,7 @@ from platformdirs import user_data_dir
 
 from .core import validate_article_url
 from .service import ArchiveOptions, ArchiveService, CancellationToken
+from .daily_replies import validate_reply_feed_url
 from .settings import AppSettings, SettingsStore
 
 
@@ -55,7 +56,7 @@ main{max-width:1240px;margin:auto;padding:28px}.top{display:flex;justify-content
 :root{color-scheme:light;--ink:#0f172a;--muted:#64748b;--surface:#fff;--bg:#fff7ed;--line:#f3d7c5;--primary:#ea580c;--primary-hover:#c2410c;--accent:#2563eb;--console:#101827}
 *{box-sizing:border-box}body.app-shell{min-height:100vh;background:var(--bg);background-image:linear-gradient(135deg,#fff7ed 0%,#ffffff 52%,#eff6ff 100%);font:14px/1.5 ui-sans-serif,system-ui,"Microsoft YaHei UI",sans-serif;color:var(--ink)}main{max-width:1340px;padding:24px 28px 36px}.top{position:relative;margin:0 0 20px;padding:20px 0;border-bottom:1px solid var(--line);align-items:flex-start}.top:before{content:"TA";display:grid;place-items:center;width:42px;height:42px;margin-right:12px;border-radius:10px;background:var(--primary);color:#fff;font-weight:800;letter-spacing:-.06em}.top>div:first-child{flex:1}.top h1{font-size:24px;line-height:1.15;letter-spacing:-.03em}.top .sub{font-size:13px}.status{display:inline-flex;align-items:center;gap:8px;margin-top:2px;padding:8px 11px;border:1px solid #fed7aa;border-radius:999px;background:#fff;color:#9a3412}.status:before{content:"";width:8px;height:8px;border-radius:50%;background:var(--primary)}.grid{grid-template-columns:minmax(0,1.22fr) minmax(380px,.78fr);gap:20px;align-items:start}.stack,.settings{gap:20px}.settings{grid-template-columns:1fr}.card{border-color:var(--line);border-radius:14px;padding:18px;background:rgba(255,255,255,.94)}.card h2{display:flex;align-items:center;gap:8px;margin-bottom:14px;font-size:13px;letter-spacing:.01em}.card h2:before{content:"";width:7px;height:7px;border-radius:50%;background:var(--primary)}.links{min-height:210px}.log{min-height:355px;margin:0;border-radius:10px;border:1px solid #1e293b;background:var(--console);box-shadow:none}.field{gap:6px;margin:8px 0 12px}.field label{font-size:12px;font-weight:700;color:#475569}input,textarea,select,button{border-radius:9px;border-color:#cbd5e1;transition:border-color .16s ease,background-color .16s ease,transform .16s ease}input:focus,textarea:focus,select:focus,button:focus-visible{outline:3px solid #bfdbfe;outline-offset:2px;border-color:var(--accent)}input,textarea,select{background:#fff}button{font-weight:650}button:hover{border-color:#94a3b8;background:#f8fafc}button.primary{min-width:128px;background:var(--primary);border-color:var(--primary)}button.primary:hover{background:var(--primary-hover);border-color:var(--primary-hover);transform:translateY(-1px)}button.stop{font-weight:650}.actions{padding:14px 16px;border-color:#fed7aa;background:#fffaf5}.actions .hint{font-size:12px}.check{padding:7px 0}.hint{line-height:1.55}.wide{grid-column:1/-1}@media(max-width:900px){body.app-shell{background:#fff7ed}main{padding:16px}.top{padding:12px 0}.grid{grid-template-columns:1fr}.settings{grid-template-columns:1fr}.wide{grid-column:auto}.log{min-height:260px}}@media(prefers-reduced-motion:reduce){*,*:before,*:after{transition-duration:0.01ms!important}}
 </style><style>.log{background:#fff;color:#0f172a;border-color:#cbd5e1;padding:9px}.primary:disabled,.primary:disabled:hover{background:#cbd5e1;border-color:#cbd5e1;color:#64748b;cursor:not-allowed;transform:none}</style></head><body class="app-shell"><main><header class="top"><div><h1>淘股吧文章归档器</h1><p class="sub">仅归档你明确提供的淘股吧文章链接</p></div><div id="loginStatus" class="status">未登录</div></header>
-<section class="grid"><div class="stack"><article class="card"><h2>文章链接</h2><textarea id="urls" class="links" placeholder="https://www.tgb.cn/a/ARTICLE_ID&#10;每行一个链接"></textarea><p class="hint">只解析主帖正文和正文图片，不获取评论。</p></article><article class="card"><h2>进度显示</h2><pre id="events" class="log" aria-live="polite">等待操作…</pre></article></div>
+<section class="grid"><div class="stack"><article class="card"><h2>文章链接</h2><textarea id="urls" class="links" placeholder="https://www.tgb.cn/a/ARTICLE_ID&#10;每行一个链接"></textarea><p class="hint">只解析主帖正文和正文图片，不获取评论。</p></article><article class="card"><h2>最新跟帖整理</h2><div class="field"><label for="replyFeed">个人页“最新跟帖”链接</label><input id="replyFeed" placeholder="https://www.tgb.cn/user/blog/moreReplyMod?userID=…"></div><div class="field"><label for="replyDate">目标日期</label><input id="replyDate" type="date"></div><button id="collectReplies" type="button">整理当天跟帖</button><p class="hint">严格按每条跟帖时间筛选；只在同一主帖分页内回溯引用的原图。</p></article><article class="card"><h2>进度显示</h2><pre id="events" class="log" aria-live="polite">等待操作…</pre></article></div>
 <div class="settings"><article class="card"><h2>登录状态</h2><p id="loginHint" class="hint">使用应用专用 Chrome Profile，不读取日常浏览器资料。</p><button id="login">登录淘股吧</button><button id="confirmLogin" hidden>我已在 Chrome 完成登录</button></article>
 <article class="card"><h2>保存位置</h2><div class="field"><label for="output">导出目录</label><div class="row"><input id="output" placeholder="例如：C:\\Users\\name\\Downloads"><button id="selectOutput" type="button">选择文件夹</button></div></div><p class="hint">选择当前电脑上的文件夹，或直接输入、粘贴目标路径。</p></article>
 <article class="card"><h2>内容范围</h2><label class="check"><input id="replies" type="checkbox">包含楼主跟帖（高级）</label></article>
@@ -64,10 +65,11 @@ main{max-width:1240px;margin:auto;padding:28px}.top{display:flex;justify-content
 <script>
 const $=id=>document.getElementById(id);let state={};
 function payload(){return{output_dir:$('output').value,export_html:$('html').checked,export_markdown:$('markdown').checked,markdown_image_mode:$('markdownMode').value||null,include_author_replies:$('replies').checked}}
+function latestReplyPayload(){return{...payload(),feed_url:$('replyFeed').value.trim(),target_date:$('replyDate').value}}
 function archiveUnavailableReason(){if(state.busy)return '归档正在运行';if(!$('urls').value.trim())return '请输入至少一个文章链接';if(!$('output').value.trim())return '请选择保存位置';if(!$('html').checked&&!$('markdown').checked)return '至少选择一种输出格式';return ''}
 function updateArchiveAvailability(){const reason=archiveUnavailableReason();$('archive').disabled=Boolean(reason);if(reason)$('reason').textContent='无法开始归档：'+reason;return reason}
 async function api(path,body){const r=await fetch(path,{method:body?'POST':'GET',headers:{'content-type':'application/json'},body:body?JSON.stringify(body):undefined});const data=await r.json();if(!r.ok)throw Error(data.error);return data}
-function render(next,syncSettings=!state.settings){state=next;const s=state.settings;if(syncSettings){$('output').value=s.output_dir||'';$('html').checked=s.export_html;$('markdown').checked=s.export_markdown;$('markdownMode').value=s.markdown_image_mode||'relative';$('markdownModeField').hidden=!s.export_markdown;$('replies').checked=s.include_author_replies}$('loginStatus').textContent=state.login_status;$('login').textContent=state.login_status==='已登录'?'重新登录':'登录淘股吧';$('confirmLogin').hidden=!state.login_pending;$('archive').disabled=state.busy;$('stop').hidden=!state.busy;$('events').textContent=state.events.length?state.events.map(e=>`[${e.time}] ${e.message}`).join('\n'):'等待操作…';$('events').scrollTop=$('events').scrollHeight}
+function render(next,syncSettings=!state.settings){state=next;const s=state.settings;if(syncSettings){$('output').value=s.output_dir||'';$('html').checked=s.export_html;$('markdown').checked=s.export_markdown;$('markdownMode').value=s.markdown_image_mode||'relative';$('markdownModeField').hidden=!s.export_markdown;$('replies').checked=s.include_author_replies}$('loginStatus').textContent=state.login_status;$('login').textContent=state.login_status==='已登录'?'重新登录':'登录淘股吧';$('confirmLogin').hidden=!state.login_pending;$('archive').disabled=state.busy;$('collectReplies').disabled=state.busy;$('stop').hidden=!state.busy;$('events').textContent=state.events.length?state.events.map(e=>`[${e.time}] ${e.message}`).join('\n'):'等待操作…';$('events').scrollTop=$('events').scrollHeight}
 async function refresh(){try{render(await api('/api/state'));updateArchiveAvailability()}catch(e){$('reason').textContent=e.message}}
 async function save(){try{render(await api('/api/settings',payload()),true);if(!updateArchiveAvailability())$('reason').textContent='配置已保存'}catch(e){$('reason').textContent=e.message}}
 for(const id of ['output','html','markdownMode','replies'])$(id).addEventListener('change',save);
@@ -76,6 +78,7 @@ $('html').addEventListener('change',updateArchiveAvailability);
 $('markdown').addEventListener('change',()=>{if($('markdown').checked&&!$('markdownMode').value)$('markdownMode').value='relative';$('markdownModeField').hidden=!$('markdown').checked;updateArchiveAvailability();save()});
 $('selectOutput').onclick=async()=>{try{const next=await api('/api/output-dir',{});render(next,true);$('reason').textContent=next.output_dir_selected?'已选择保存位置':'未更改保存位置'}catch(e){$('reason').textContent=e.message}};
 $('archive').onclick=async()=>{try{render(await api('/api/archive',{urls:$('urls').value.split(/\r?\n/).map(v=>v.trim()).filter(Boolean),...payload()}));$('reason').textContent='归档任务已开始'}catch(e){$('reason').textContent=e.message}};
+$('collectReplies').onclick=async()=>{try{render(await api('/api/latest-replies',latestReplyPayload()));$('reason').textContent='最新跟帖整理已开始'}catch(e){$('reason').textContent=e.message}};
 $('stop').onclick=async()=>render(await api('/api/cancel',{}));$('login').onclick=async()=>render(await api('/api/login',payload()));$('confirmLogin').onclick=async()=>render(await api('/api/login/confirm',{}));refresh();setInterval(refresh,800);
 </script></body></html>"""
 
@@ -194,6 +197,25 @@ class WebApp:
         self._worker.start()
         return self.state()
 
+    def start_latest_replies(self, feed_url: str, target_date: str) -> dict:
+        with self._lock:
+            if self._worker is not None and self._worker.is_alive():
+                raise RuntimeError("归档正在运行")
+        normalized_feed_url = validate_reply_feed_url(feed_url)
+        try:
+            datetime.strptime(target_date, "%Y-%m-%d")
+        except ValueError as exc:
+            raise ValueError("日期必须是 YYYY-MM-DD，例如 2026-07-21") from exc
+        options = self._options()
+        self._event(f"开始整理最新跟帖：{target_date}")
+        self._worker = threading.Thread(
+            target=self._collect_latest_replies,
+            args=(normalized_feed_url, target_date, options),
+            daemon=True,
+        )
+        self._worker.start()
+        return self.state()
+
     def _archive(self, urls: list[str], options: ArchiveOptions, cancellation: CancellationToken) -> None:
         try:
             def progress(item) -> None:
@@ -213,6 +235,20 @@ class WebApp:
                 self._event("归档完成")
         except Exception as exc:
             self._event(f"归档失败：{exc}")
+
+    def _collect_latest_replies(
+        self, feed_url: str, target_date: str, options: ArchiveOptions
+    ) -> None:
+        try:
+            result = self.service.collect_latest_replies(feed_url, target_date, options)
+            if result.complete:
+                self._event(f"最新跟帖整理完成：共 {result.reply_count} 条")
+            else:
+                if getattr(result, "login_required", False):
+                    self.login_status = "登录失效；请重新登录"
+                self._event(f"最新跟帖整理不完整：{result.incomplete_reason}")
+        except Exception as exc:
+            self._event(f"最新跟帖整理失败：{exc}")
 
     def cancel(self) -> dict:
         if self._cancellation is not None:
@@ -302,6 +338,11 @@ class WebHandler(BaseHTTPRequestHandler):
             elif self.path == "/api/archive":
                 self.app.update_settings(payload)
                 result = self.app.start_archive(payload.get("urls", []))
+            elif self.path == "/api/latest-replies":
+                self.app.update_settings(payload)
+                result = self.app.start_latest_replies(
+                    payload.get("feed_url", ""), payload.get("target_date", "")
+                )
             elif self.path == "/api/cancel":
                 result = self.app.cancel()
             elif self.path == "/api/login":

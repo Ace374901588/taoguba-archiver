@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import mimetypes
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 from html import escape
 from pathlib import Path
@@ -17,6 +17,15 @@ from .core import (
     parse_article,
     safe_filename,
     validate_article_url,
+)
+from .daily_replies import (
+    DailyReplyDetail,
+    is_content_image_url,
+    parse_associated_reply,
+    parse_latest_reply_feed,
+    render_daily_replies_html,
+    resolve_quote_image_placeholder,
+    validate_reply_feed_url,
 )
 from .markdown import render_article_markdown
 
@@ -45,6 +54,17 @@ class BrowserBatchResult:
     cancelled: bool = False
 
 
+@dataclass(frozen=True)
+class DailyReplyFetchResult:
+    feed_url: str
+    target_date: str
+    archive_dir: Path
+    complete: bool
+    reply_count: int
+    incomplete_reason: str | None = None
+    login_required: bool = False
+
+
 def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -59,6 +79,22 @@ def _asset_name(url: str, content_type: str | None, index: int) -> str:
         extension = ".bin"
     digest = hashlib.sha256(url.encode("utf-8")).hexdigest()[:10]
     return f"{index:02d}-{stem}-{digest}{extension}"
+
+
+def _safe_response_headers(response) -> dict[str, str]:
+    headers = getattr(response, "headers", {}) if response is not None else {}
+    return {
+        str(key).lower(): str(value)
+        for key, value in headers.items()
+        if str(key).lower() in SAFE_RESPONSE_HEADERS
+    }
+
+
+def _response_bytes(response) -> bytes:
+    try:
+        return response.body() if response is not None else b""
+    except Exception:
+        return b""
 
 
 def _render_offline_article_html(
@@ -238,6 +274,210 @@ class TaogubaBrowser:
             context.close()
             manager.stop()
         return BrowserBatchResult(items=items, cancelled=cancelled)
+
+    def fetch_latest_replies(self, feed_url: str, target_date: str) -> DailyReplyFetchResult:
+        """Export one explicitly supplied user's latest replies for one calendar date.
+
+        Pagination stops as soon as the feed reaches a date older than ``target_date``.
+        It never follows profile links or discovers other users' pages.
+        """
+        normalized_feed_url = validate_reply_feed_url(feed_url)
+        try:
+            requested_date = datetime.strptime(target_date, "%Y-%m-%d").date()
+        except ValueError as exc:
+            raise ValueError("日期必须是 YYYY-MM-DD，例如 2026-07-21") from exc
+
+        manager, context = self._launch()
+        try:
+            page = context.pages[0] if context.pages else context.new_page()
+            feed_response = page.goto(normalized_feed_url, wait_until="domcontentloaded", timeout=self.timeout_ms)
+            if self.settle_ms:
+                page.wait_for_timeout(self.settle_ms)
+            feed_raw = _response_bytes(feed_response)
+            feed_status = getattr(feed_response, "status", None)
+            feed_headers = _safe_response_headers(feed_response)
+            feed_rendered = page.content()
+
+            entries = []
+            author = None
+            login_required = False
+            seen_reply_urls: set[str] = set()
+            previous_page_html = None
+            feed_has_entries = False
+            feed_http_ok = feed_status is not None and 200 <= feed_status < 400
+            if feed_http_ok:
+                for _page_number in range(1, 301):
+                    feed_html = page.content()
+                    feed_rendered = feed_html
+                    if feed_html == previous_page_html:
+                        break
+                    previous_page_html = feed_html
+                    feed = parse_latest_reply_feed(feed_html, page.url)
+                    author = author or feed.author
+                    login_required = login_required or feed.login_required
+                    page_entries = feed.entries
+                    feed_has_entries = feed_has_entries or bool(page_entries)
+                    for entry in feed.entries_for_date(target_date):
+                        if entry.reply_url not in seen_reply_urls:
+                            entries.append(entry)
+                            seen_reply_urls.add(entry.reply_url)
+                    page_dates = [
+                        datetime.strptime(entry.published_at[:10], "%Y-%m-%d").date()
+                        for entry in page_entries
+                    ]
+                    if login_required or not page_dates or min(page_dates) < requested_date:
+                        break
+                    next_links = page.locator("a[href^='javascript:gotoPage']")
+                    if next_links.count() == 0:
+                        break
+                    next_links.first.click()
+                    if self.settle_ms:
+                        page.wait_for_timeout(self.settle_ms)
+
+            details_by_url: dict[str, DailyReplyDetail] = {}
+            page_cache: dict[str, tuple[str, str]] = {}
+            article_pages_loaded = 0
+
+            def capture_article_page(article_page) -> tuple[str, str]:
+                nonlocal article_pages_loaded
+                html = article_page.content()
+                fingerprint = _sha256(html.encode("utf-8"))
+                if fingerprint in page_cache:
+                    return page_cache[fingerprint]
+                snapshot = (html, article_page.url)
+                page_cache[fingerprint] = snapshot
+                article_pages_loaded += 1
+                return snapshot
+
+            def capture_pending(article_page, pending) -> list:
+                html, page_url = capture_article_page(article_page)
+                remaining = []
+                for entry in pending:
+                    detail = parse_associated_reply(html, page_url, entry)
+                    if detail.target_found:
+                        details_by_url[entry.reply_url] = detail
+                    else:
+                        remaining.append(entry)
+                return remaining
+
+            if feed_http_ok and not login_required:
+                entries_by_article: dict[str, list] = {}
+                for entry in entries:
+                    entries_by_article.setdefault(entry.article_url, []).append(entry)
+                for article_url, article_entries in entries_by_article.items():
+                    pending = article_entries
+                    page.goto(article_url, wait_until="domcontentloaded", timeout=self.timeout_ms)
+                    if self.settle_ms:
+                        page.wait_for_timeout(self.settle_ms)
+                    pending = capture_pending(page, pending)
+                    for selector in ("a.prev-page", "a.next-page"):
+                        if not pending:
+                            break
+                        if selector == "a.next-page":
+                            page.goto(article_url, wait_until="domcontentloaded", timeout=self.timeout_ms)
+                            if self.settle_ms:
+                                page.wait_for_timeout(self.settle_ms)
+                            pending = capture_pending(page, pending)
+                        for _ in range(1, 101):
+                            links = page.locator(selector)
+                            if not pending or links.count() == 0:
+                                break
+                            links.first.click()
+                            if self.settle_ms:
+                                page.wait_for_timeout(self.settle_ms)
+                            before = len(page_cache)
+                            pending = capture_pending(page, pending)
+                            if len(page_cache) == before:
+                                break
+
+                # A quote can omit its image from the target reply DOM.  Reuse the
+                # bounded article-page cache to recover it from the original comment.
+                for reply_url, detail in list(details_by_url.items()):
+                    if detail.context is None or not detail.context.image_placeholder:
+                        continue
+                    resolved = detail.context
+                    for html, page_url in page_cache.values():
+                        resolved = resolve_quote_image_placeholder(html, page_url, resolved)
+                        if not resolved.image_placeholder:
+                            break
+                    details_by_url[reply_url] = replace(detail, context=resolved)
+
+            details = [details_by_url[entry.reply_url] for entry in entries if entry.reply_url in details_by_url]
+            missing_targets = len(entries) - len(details)
+            fetched_at = datetime.now().astimezone()
+            archive_dir = allocate_archive_dir(
+                self.output_dir, "latest-replies", f"{author or '未知作者'}-{target_date}",
+                fetched_at.strftime("%Y-%m-%d-%H%M%S"),
+            )
+            archive_dir.mkdir(parents=True, exist_ok=False)
+            assets_dir = archive_dir / "images"
+            assets_dir.mkdir()
+            (archive_dir / "response.html").write_bytes(feed_raw)
+            rendered_bytes = feed_rendered.encode("utf-8")
+            (archive_dir / "rendered.html").write_bytes(rendered_bytes)
+
+            local_images: dict[str, str] = {}
+            all_image_urls = [
+                image_url for detail in details for image_url in (
+                    detail.image_urls + (detail.context.image_urls if detail.context else [])
+                ) if is_content_image_url(image_url)
+            ]
+            asset_manifest = []
+            for index, image_url in enumerate(dict.fromkeys(all_image_urls), 1):
+                record = {"source_url": image_url, "kind": "content", "local_file": None, "error": None}
+                try:
+                    image_response = context.request.get(image_url, timeout=self.timeout_ms)
+                    if not image_response.ok:
+                        raise RuntimeError(f"HTTP {image_response.status}")
+                    content_type = image_response.headers.get("content-type")
+                    image_bytes = image_response.body()
+                    filename = _asset_name(image_url, content_type, index)
+                    (assets_dir / filename).write_bytes(image_bytes)
+                    local_file = f"images/{filename}"
+                    local_images[image_url] = local_file
+                    record.update(local_file=local_file, content_type=content_type, size=len(image_bytes), sha256=_sha256(image_bytes))
+                except Exception as exc:
+                    record["error"] = str(exc)
+                asset_manifest.append(record)
+
+            output_html = render_daily_replies_html(author, target_date, details, local_images)
+            (archive_dir / "daily-replies.html").write_text(output_html, encoding="utf-8")
+            reasons = []
+            if not feed_http_ok:
+                reasons.append(f"最新跟帖页面 HTTP {feed_status if feed_status is not None else '未知状态'}")
+            if login_required:
+                reasons.append("页面提示登录后查看全文")
+            if feed_http_ok and not login_required and not feed_has_entries:
+                reasons.append("无法解析最新跟帖页面；已保留响应与渲染诊断文件")
+            if missing_targets:
+                reasons.append(f"有 {missing_targets} 条目标跟帖未在主帖分页中定位到")
+            incomplete_reason = "；".join(reasons) or None
+            complete = incomplete_reason is None
+            metadata = {
+                "schema_version": 1, "source": "淘股吧", "source_url": normalized_feed_url,
+                "target_date": target_date, "fetched_at": fetched_at.isoformat(),
+                "status": "complete" if complete else "incomplete", "incomplete_reason": incomplete_reason,
+                "author": author, "reply_count": len(details), "http_status": feed_status,
+                "response_headers": feed_headers, "response_sha256": _sha256(feed_raw),
+                "rendered_sha256": _sha256(rendered_bytes),
+                "cache": {"article_pages_loaded": article_pages_loaded, "unique_page_snapshots": len(page_cache)},
+                "replies": [
+                    {"published_at": detail.entry.published_at, "text": detail.text,
+                     "article_title": detail.entry.article_title, "article_url": detail.entry.article_url,
+                     "reply_url": detail.entry.reply_url, "has_context": detail.context is not None,
+                     "context_image_status": (
+                         "not_applicable" if detail.context is None else
+                         "unresolved" if detail.context.image_placeholder else
+                         "present" if detail.context.image_urls else "none"
+                     )}
+                    for detail in details
+                ], "assets": asset_manifest,
+            }
+            (archive_dir / "metadata.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+            return DailyReplyFetchResult(normalized_feed_url, target_date, archive_dir, complete, len(details), incomplete_reason, login_required)
+        finally:
+            context.close()
+            manager.stop()
 
     def _fetch_one(self, context, page, url: str) -> tuple[Path, bool, str | None, bool]:
         fetched_at = datetime.now().astimezone()

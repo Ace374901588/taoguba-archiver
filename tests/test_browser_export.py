@@ -17,6 +17,19 @@ HTML = """
 </body></html>
 """
 
+LATEST_REPLIES_HTML = """
+<html><body><h1>测试作者的博客</h1><section class="reply-item">
+<span>2026-07-21 22:16 跟帖了</span><span>来自：《<a href="/a/article-one">测试主帖</a>》</span>
+<a href="/a/article-one/101#101">当天跟帖 (26)</a></section></body></html>
+"""
+
+REPLY_DETAIL_HTML = """
+<html><body><div class="comment-data" data-comment-id="101">
+<div class="comment-data-text"><p>当天跟帖</p><img data-original="https://image.tgb.cn/reply.png"></div>
+<div class="comment-data-reply"><a href="/blog/99">提问用户</a><time>2026-07-21 21:59</time><p>关联原话。</p></div>
+</div></body></html>
+"""
+
 
 class FakeResponse:
     status = 200
@@ -61,7 +74,112 @@ class FakePage:
         return HTML
 
 
+class LatestRepliesPage:
+    def __init__(self):
+        self.url = ""
+        self._content = ""
+
+    def goto(self, url, **_kwargs):
+        self.url = url
+        self._content = LATEST_REPLIES_HTML if "moreReplyMod" in url else REPLY_DETAIL_HTML
+        return FakeResponse()
+
+    def wait_for_timeout(self, _milliseconds):
+        return None
+
+    def content(self):
+        return self._content
+
+    def locator(self, _selector):
+        return type("NoNextPage", (), {"count": lambda _self: 0})()
+
+
+class LatestRepliesContext(FakeContext):
+    def __init__(self):
+        super().__init__()
+        self.pages = []
+        self.page = LatestRepliesPage()
+
+    def new_page(self):
+        return self.page
+
+    def close(self):
+        return None
+
+
 class BrowserExportTests(unittest.TestCase):
+    def test_exports_explicit_latest_replies_as_a_portable_daily_html(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            browser = TaogubaBrowser(root / "profile", root / "exports", settle_ms=0)
+            context = LatestRepliesContext()
+            browser._launch = lambda: (type("Manager", (), {"stop": lambda _self: None})(), context)
+
+            result = browser.fetch_latest_replies(
+                "https://www.tgb.cn/user/blog/moreReplyMod?userID=42", "2026-07-21"
+            )
+
+            self.assertTrue(result.complete)
+            self.assertEqual(result.reply_count, 1)
+            html = (result.archive_dir / "daily-replies.html").read_text(encoding="utf-8")
+            metadata = json.loads((result.archive_dir / "metadata.json").read_text(encoding="utf-8"))
+            self.assertIn("关联原话。", html)
+            self.assertIn('src="images/', html)
+            self.assertEqual(metadata["target_date"], "2026-07-21")
+            self.assertNotIn("cookie", json.dumps(metadata).lower())
+
+    def test_marks_a_failed_reply_feed_response_incomplete_and_keeps_diagnostics(self):
+        class BadResponse(FakeResponse):
+            status = 502
+            ok = False
+
+            def body(self):
+                return b"bad gateway"
+
+        class BadPage(LatestRepliesPage):
+            def goto(self, url, **kwargs):
+                self.url = url
+                self._content = "<html><title>502 Bad Gateway</title><body>Bad Gateway</body></html>"
+                return BadResponse()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            browser = TaogubaBrowser(root / "profile", root / "exports", settle_ms=0)
+            context = LatestRepliesContext()
+            context.page = BadPage()
+            browser._launch = lambda: (type("Manager", (), {"stop": lambda _self: None})(), context)
+
+            result = browser.fetch_latest_replies(
+                "https://www.tgb.cn/user/blog/moreReplyMod?userID=42", "2026-07-21"
+            )
+
+            self.assertFalse(result.complete)
+            self.assertIn("HTTP 502", result.incomplete_reason)
+            self.assertTrue((result.archive_dir / "response.html").is_file())
+            self.assertTrue((result.archive_dir / "rendered.html").is_file())
+
+    def test_reuses_the_same_dom_snapshot_when_a_live_page_changes_between_reads(self):
+        class ChangingPage(LatestRepliesPage):
+            def content(self):
+                if "moreReplyMod" in self.url:
+                    return self._content
+                self.reads = getattr(self, "reads", 0) + 1
+                return f"{self._content}<!-- live-render-{self.reads} -->"
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            browser = TaogubaBrowser(root / "profile", root / "exports", settle_ms=0)
+            context = LatestRepliesContext()
+            context.page = ChangingPage()
+            browser._launch = lambda: (type("Manager", (), {"stop": lambda _self: None})(), context)
+
+            result = browser.fetch_latest_replies(
+                "https://www.tgb.cn/user/blog/moreReplyMod?userID=42", "2026-07-21"
+            )
+
+            self.assertTrue(result.complete)
+            self.assertEqual(result.reply_count, 1)
+
     def test_markdown_only_keeps_traceability_files_and_safe_metadata(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

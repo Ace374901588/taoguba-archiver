@@ -35,6 +35,7 @@ This repository is standalone. It has no dependency on StockVault, Obsidian or a
 
 - Open a dedicated Chrome Profile for manual Taoguba login.
 - Fetch one or several explicit article URLs.
+- Create a standalone daily HTML reading page from one explicitly supplied personal “latest replies” URL.
 - Archive the original response, rendered DOM, main-body HTML and body images.
 - Parse only the main post by default.
 - Record provenance, hashes and completeness in `metadata.json`.
@@ -74,6 +75,12 @@ Profile and exports. Use `scripts/run_web.bat` to start it on Windows without ty
 Choose an export directory, paste one explicit Taoguba article URL per line, select one or both
 output formats, and start the archive. For the first login, choose “登录淘股吧”, finish in the
 application-owned Chrome window, then confirm in the browser workspace.
+
+The workspace also accepts one explicit personal “最新跟帖” page URL and a calendar date. It stops
+pagination once it reaches older entries, filters strictly by each reply's timestamp, and creates a
+separate `daily-replies.html`. It keeps target replies and their direct context; when Taoguba turns a
+quoted image into `［图片］`, it looks only through the same source article's comment pages to recover
+that image.
 
 ## CLI 使用（中文）
 
@@ -129,6 +136,21 @@ taoguba-archiver --markdown --markdown-images relative URL
 ```powershell
 taoguba-archiver --markdown --markdown-images relative --no-html URL
 ```
+
+整理某位用户指定日期的最新跟帖：
+
+```powershell
+taoguba-archiver `
+  --reply-feed "https://www.tgb.cn/user/blog/moreReplyMod?userID=6671396" `
+  --reply-date 2026-07-21
+```
+
+该模式只处理你明确提供的“最新跟帖”页；会自动翻页到早于目标日期的位置，严格按每条跟帖的
+时间过滤，并生成独立的 `daily-replies.html`、`metadata.json` 和本地 `images/`。它不会搜索或遍历
+其他用户页面，也不会收集整篇文章的普通讨论。为避免重复打开同一篇主帖，它按主帖及评论分页
+缓存页面；仅在引用显示为 `［图片］` 时，才在这篇主帖的已有分页中回溯原评论图片。最新跟帖模式
+需要有界面 Chrome（淘股吧会拒绝无界面请求）。若页面响应异常、登录失效或有目标跟帖未定位到，
+仍会保留 `response.html`、`rendered.html` 和 `metadata.json`，并标记为不完整。
 
 其他常用参数：
 
@@ -214,6 +236,8 @@ taoguba-archiver-web --help
 ## Safety and scope
 
 - Only user-supplied Taoguba URLs are accepted.
+- A latest-replies export accepts only an explicitly supplied
+  `/user/blog/moreReplyMod?userID=…` URL and stops at the requested date boundary.
 - Cookie and `Set-Cookie` values are not written to exports.
 - The tool is intended for personal, low-frequency archival use.
 - Users are responsible for complying with site terms, copyright and applicable laws.

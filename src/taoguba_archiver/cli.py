@@ -16,6 +16,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("urls", nargs="*", help="一个或多个淘股吧文章 URL")
     parser.add_argument("--urls-file", type=Path, help="每行一个 URL 的 UTF-8 文本文件")
     parser.add_argument(
+        "--reply-feed",
+        help="明确提供的淘股吧个人页“最新跟帖”URL；按日期整理为独立 HTML",
+    )
+    parser.add_argument(
+        "--reply-date", help="--reply-feed 的目标日期，格式 YYYY-MM-DD"
+    )
+    parser.add_argument(
         "--login", action="store_true", help="打开专用 Chrome Profile，手工登录一次"
     )
     parser.add_argument(
@@ -72,6 +79,14 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--markdown-images 只能与 --markdown 一起使用")
     if not args.login and args.no_html and not args.markdown:
         parser.error("--no-html 只能在启用 --markdown 时使用")
+    if args.reply_feed and (args.urls or args.urls_file):
+        parser.error("--reply-feed 不能与文章 URL 或 --urls-file 同时使用")
+    if args.reply_feed and not args.reply_date:
+        parser.error("使用 --reply-feed 时必须指定 --reply-date")
+    if args.reply_feed and args.headless:
+        parser.error("--reply-feed 需要有界面 Chrome；淘股吧会拒绝无界面请求")
+    if args.reply_feed and (args.markdown or args.no_html):
+        parser.error("最新跟帖整理固定生成独立 HTML，不支持 Markdown 或 --no-html")
 
     options = ArchiveOptions(
         profile_dir=args.profile_dir,
@@ -91,9 +106,21 @@ def main(argv: list[str] | None = None) -> int:
         print(f"登录 Profile 已保存在：{options.profile_dir.expanduser().resolve()}")
         return 0
 
+    if args.reply_feed:
+        try:
+            result = service.collect_latest_replies(args.reply_feed, args.reply_date, options)
+        except (ValueError, RuntimeError) as exc:
+            print(f"错误：{exc}", file=sys.stderr)
+            return 2
+        print(f"已整理 {result.reply_count} 条跟帖：{result.archive_dir}")
+        if not result.complete:
+            print(f"整理不完整：{result.incomplete_reason}", file=sys.stderr)
+            return 3
+        return 0
+
     urls = _load_urls(args)
     if not urls:
-        parser.error("请提供文章 URL、--urls-file 或 --login")
+        parser.error("请提供文章 URL、--urls-file、--reply-feed 或 --login")
 
     try:
         result = service.archive(urls, options)

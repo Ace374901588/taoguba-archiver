@@ -17,6 +17,20 @@ class FakeService:
         on_progress(type("Progress", (), {"completed": 1, "total": 1, "url": urls[0], "complete": True})())
         return ArchiveBatchResult(items=[item])
 
+    def collect_latest_replies(self, feed_url, target_date, options):
+        self.feed_url = feed_url
+        self.target_date = target_date
+        return type(
+            "DailyResult",
+            (),
+            {
+                "archive_dir": options.output_dir / "daily-replies",
+                "reply_count": 2,
+                "complete": True,
+                "login_required": False,
+            },
+        )()
+
 
 class WebAppTests(unittest.TestCase):
     def test_project_exposes_only_cli_and_browser_application_entries(self):
@@ -126,6 +140,26 @@ class WebAppTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "请至少提供一个淘股吧文章 URL"):
             self.app.start_archive([])
 
+    def test_collects_explicit_latest_replies_in_a_background_worker(self):
+        self.app.update_settings(
+            {
+                "output_dir": str(Path(self.temp_dir.name) / "exports"),
+                "export_html": True,
+                "export_markdown": False,
+                "markdown_image_mode": None,
+                "include_author_replies": False,
+            }
+        )
+
+        self.app.start_latest_replies(
+            "https://www.tgb.cn/user/blog/moreReplyMod?userID=6671396", "2026-07-21"
+        )
+        self.app.wait_for_idle(timeout=1)
+
+        messages = [event["message"] for event in self.app.state()["events"]]
+        self.assertIn("开始整理最新跟帖：2026-07-21", messages)
+        self.assertIn("最新跟帖整理完成：共 2 条", messages)
+
     def test_local_server_serves_browser_workspace_on_loopback(self):
         server = serve(port=0, open_browser=False)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -135,6 +169,9 @@ class WebAppTests(unittest.TestCase):
                 page = response.read().decode("utf-8")
             self.assertIn("淘股吧文章归档器", page)
             self.assertIn("/api/archive", page)
+            self.assertIn("/api/latest-replies", page)
+            self.assertIn('id="replyFeed"', page)
+            self.assertIn('id="replyDate" type="date"', page)
             self.assertIn('class="app-shell"', page)
             self.assertIn('aria-live="polite"', page)
             self.assertIn('id="selectOutput"', page)

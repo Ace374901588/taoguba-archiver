@@ -5,7 +5,7 @@ from pathlib import Path
 from threading import Event
 from typing import Callable
 
-from .browser import BrowserFetchResult, TaogubaBrowser
+from .browser import BrowserFetchResult, DailyReplyFetchResult, TaogubaBrowser
 from .core import validate_article_url
 
 
@@ -129,3 +129,11 @@ class ArchiveService:
             should_cancel=cancellation.is_cancelled if cancellation is not None else None,
         )
         return ArchiveBatchResult(items=batch.items, cancelled=batch.cancelled)
+
+    def collect_latest_replies(
+        self, feed_url: str, target_date: str, options: ArchiveOptions
+    ) -> DailyReplyFetchResult:
+        """Create one portable daily-replies export from an explicit feed URL."""
+        return self._browser(options, validate_exports=False).fetch_latest_replies(
+            feed_url, target_date
+        )

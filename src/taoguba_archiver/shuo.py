@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from html import escape
-from urllib.parse import parse_qs, urljoin, urlparse
+from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
 from bs4 import BeautifulSoup
 
@@ -11,10 +11,10 @@ from .core import LOGIN_MARKERS
 
 _SHUO_HOST = "shuo.tgb.cn"
 _SHUO_PATH = "/shuo/toViewShuo"
-_TITLE_SELECTORS = (".shuo-title", "#shuoTitle", ".shuo-detail-title", "h1")
-_AUTHOR_SELECTORS = (".shuo-author", ".shuo-meta .author", ".shuo-user a")
-_TIME_SELECTORS = (".shuo-time", ".shuo-meta time", ".shuo-meta .time", "time")
-_BODY_SELECTORS = (".shuo-content", "#shuoContent", ".shuo-detail-content", ".shuo-text")
+_TITLE_SELECTORS = (".shuo-title",)
+_AUTHOR_SELECTORS = (".shuo-author",)
+_TIME_SELECTORS = (".shuo-time",)
+_BODY_SELECTORS = (".shuo-content",)
 _IMAGE_ATTRIBUTES = ("data-original", "data-src", "src2", "src")
 
 
@@ -37,12 +37,23 @@ def validate_shuo_url(url: str) -> str:
         raise ValueError(f"只允许 HTTPS URL：{candidate}")
     if (parsed.hostname or "").lower() != _SHUO_HOST:
         raise ValueError(f"只允许 shuo.tgb.cn：{candidate}")
+    if parsed.username or parsed.password or parsed.fragment:
+        raise ValueError("说说 URL 不能包含用户信息或片段")
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("说说 URL 端口无效") from exc
+    if port not in (None, 443):
+        raise ValueError("说说 URL 不能使用非默认端口")
     if parsed.path.rstrip("/") != _SHUO_PATH:
         raise ValueError("URL 必须是单条说说页面")
-    shuo_ids = parse_qs(parsed.query).get("shuoID", [])
-    if len(shuo_ids) != 1 or not shuo_ids[0].isdigit():
+    try:
+        query_items = parse_qsl(parsed.query, keep_blank_values=True, strict_parsing=True)
+    except ValueError as exc:
+        raise ValueError("说说 URL 查询参数无效") from exc
+    if len(query_items) != 1 or query_items[0][0] != "shuoID" or not query_items[0][1].isdigit():
         raise ValueError("说说 URL 必须包含数字 shuoID")
-    return candidate
+    return urlunparse(("https", _SHUO_HOST, _SHUO_PATH, "", urlencode(query_items), ""))
 
 
 def _clean_text(element) -> str:
@@ -152,5 +163,5 @@ def render_shuo_html(
     return f'''<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{escape(content.title)}</title><style>
-:root{{--page:#f5f7fb;--surface:#fff;--ink:#172033;--muted:#64748b;--line:#dce3ed;--brand:#0f766e}}*{{box-sizing:border-box}}body{{margin:0;background:var(--page);color:var(--ink);font:16px/1.75 system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif}}main{{width:min(100% - 32px,900px);margin:24px auto 48px;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:28px}}h1{{margin:0;font-size:clamp(24px,4vw,34px)}}.meta{{margin:10px 0 24px;color:var(--muted);font-size:14px}}.meta a{{color:var(--brand);text-decoration:none}}.body{{overflow-wrap:anywhere}}.body img{{display:block;max-width:100%;height:auto;margin:14px 0;border-radius:8px}}.source{{margin-top:28px;padding-top:16px;border-top:1px solid var(--line);font-size:13px}}.source a{{color:var(--brand)}}
+:root{{--page:#f5f7fb;--surface:#fff;--ink:#172033;--muted:#64748b;--line:#dce3ed;--brand:#0f766e}}*{{box-sizing:border-box}}body{{margin:0;background:var(--page);color:var(--ink);font:16px/1.75 system-ui,sans-serif}}main{{width:min(100% - 32px,900px);margin:24px auto 48px;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:28px}}h1{{margin:0;font-size:clamp(24px,4vw,34px)}}.meta{{margin:10px 0 24px;color:var(--muted);font-size:14px}}.meta a{{color:var(--brand);text-decoration:none}}.body{{overflow-wrap:anywhere}}.body img{{display:block;max-width:100%;height:auto;margin:14px 0;border-radius:8px}}.source{{margin-top:28px;padding-top:16px;border-top:1px solid var(--line);font-size:13px}}.source a{{color:var(--brand)}}
 </style></head><body><main><article><h1>{escape(content.title)}</h1><p class="meta">{author} · {published_at}</p><section class="body">{body}</section></article><p class="source"><a href="{escape(source_url, quote=True)}" target="_blank" rel="noreferrer">查看原说说</a></p></main></body></html>'''

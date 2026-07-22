@@ -34,6 +34,17 @@ class ShuoTests(unittest.TestCase):
             with self.subTest(url=invalid), self.assertRaises(ValueError):
                 validate_shuo_url(invalid)
 
+    def test_rejects_url_parts_that_could_carry_or_redirect_sensitive_state(self):
+        for invalid in (
+            "https://user@shuo.tgb.cn/shuo/toViewShuo?shuoID=42",
+            "https://shuo.tgb.cn:444/shuo/toViewShuo?shuoID=42",
+            "https://shuo.tgb.cn/shuo/toViewShuo?shuoID=42#profile",
+            "https://shuo.tgb.cn/shuo/toViewShuo?shuoID=42&token=secret",
+            "https://shuo.tgb.cn/shuo/toViewShuo?shuoID=42&shuoID=43",
+        ):
+            with self.subTest(url=invalid), self.assertRaises(ValueError):
+                validate_shuo_url(invalid)
+
     def test_parses_only_the_shuo_body_and_its_content_image(self):
         content = parse_shuo(
             SHUO_HTML, "https://shuo.tgb.cn/shuo/toViewShuo?shuoID=42"

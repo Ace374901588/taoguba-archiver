@@ -53,6 +53,9 @@ class FakeResponse:
     headers = {"content-type": "text/html", "set-cookie": "must-not-export"}
     ok = True
 
+    def __init__(self, url=None):
+        self.url = url
+
     def body(self):
         return b"raw-response"
 
@@ -65,9 +68,9 @@ class FakeImageResponse(FakeResponse):
 
 
 class FakeRequest:
-    def get(self, _url, timeout):
+    def get(self, url, timeout):
         self.timeout = timeout
-        return FakeImageResponse()
+        return FakeImageResponse(url)
 
 
 class FakeContext:
@@ -193,6 +196,155 @@ class BrowserExportTests(unittest.TestCase):
             self.assertIn("HTTP 502", result.incomplete_reason)
             self.assertTrue((result.archive_dir / "response.html").is_file())
             self.assertTrue((result.archive_dir / "rendered.html").is_file())
+
+    def test_rejects_an_out_of_scope_shuo_redirect_without_leaking_its_url(self):
+        class RedirectPage(FakePage):
+            def goto(self, url, **kwargs):
+                self.url = f"{url}&token=redirect-secret#credential-fragment"
+                return FakeResponse(url)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            browser = TaogubaBrowser(root / "profile", root / "exports", settle_ms=0)
+            context = ShuoContext(RedirectPage())
+            browser._launch = lambda: (type("Manager", (), {"stop": lambda _self: None})(), context)
+
+            result = browser.fetch_shuo(SHUO_URL)
+
+            self.assertFalse(result.complete)
+            self.assertIn("URL", result.incomplete_reason)
+            self.assertEqual(context.request.__dict__, {})
+            archive_text = "\n".join(
+                path.read_text(encoding="utf-8")
+                for path in result.archive_dir.iterdir()
+                if path.is_file()
+            )
+            self.assertNotIn("redirect-secret", archive_text)
+            self.assertNotIn("credential-fragment", archive_text)
+            metadata = json.loads((result.archive_dir / "metadata.json").read_text(encoding="utf-8"))
+            self.assertEqual(metadata["source_url"], SHUO_URL)
+            self.assertIsNone(metadata["final_url"])
+
+    def test_sanitizes_secrets_from_all_shuo_diagnostics_and_exports(self):
+        secret_html = """
+        <html><head>
+        <meta name="csrf-token" content="secret-meta-token">
+        <style>.x { background: url('https://example.test/a?token=secret-style-token') }</style>
+        <script>document.cookie = 'secret-script-cookie'</script>
+        </head><body>
+        <input type="hidden" name="csrf_token" value="secret-input-token">
+        <iframe src="https://example.test/frame?auth=secret-frame-token"></iframe>
+        <h1 class="shuo-title">安全诊断</h1>
+        <section class="shuo-content">
+        <a href="https://example.test/path?token=secret-link-token#secret-fragment"
+           onclick="send('secret-event-token')">正文链接</a>
+        <p>https://example.test/plain?token=secret-text-token#plain-fragment</p>
+        <img data-original="https://image.tgb.cn/secure.png?token=secret-image-token">
+        </section></body></html>
+        """
+
+        class SecretResponse(FakeResponse):
+            def body(self):
+                return secret_html.encode("utf-8")
+
+        class SecretPage(FakePage):
+            def goto(self, url, **kwargs):
+                self.url = url
+                return SecretResponse(url)
+
+            def content(self):
+                return secret_html
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            browser = TaogubaBrowser(root / "profile", root / "exports", settle_ms=0)
+            context = ShuoContext(SecretPage())
+            browser._launch = lambda: (type("Manager", (), {"stop": lambda _self: None})(), context)
+
+            result = browser.fetch_shuo(SHUO_URL)
+
+            self.assertTrue(result.complete)
+            combined = "\n".join(
+                (result.archive_dir / filename).read_text(encoding="utf-8")
+                for filename in ("response.html", "rendered.html", "shuo.html", "metadata.json")
+            )
+            for secret in (
+                "secret-meta-token",
+                "secret-style-token",
+                "secret-script-cookie",
+                "secret-input-token",
+                "secret-frame-token",
+                "secret-link-token",
+                "secret-fragment",
+                "secret-event-token",
+                "secret-text-token",
+                "secret-image-token",
+            ):
+                self.assertNotIn(secret, combined)
+
+    def test_rejects_redirected_and_non_image_shuo_assets(self):
+        shuo_with_two_images = SHUO_HTML.replace(
+            "</section>",
+            '<img src="https://image.tgb.cn/not-image.png" alt="伪图片"></section>',
+            1,
+        )
+
+        class AssetResponse(FakeImageResponse):
+            def __init__(self, url, content_type):
+                super().__init__(url)
+                self.headers = {"content-type": content_type}
+
+        class UnsafeAssetRequest:
+            def get(self, url, timeout):
+                if url.endswith("shuo-content.png"):
+                    return AssetResponse("https://evil.example/redirected.png", "image/png")
+                return AssetResponse(url, "text/html")
+
+        class TwoImagePage(FakePage):
+            def content(self):
+                return shuo_with_two_images
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            browser = TaogubaBrowser(root / "profile", root / "exports", settle_ms=0)
+            context = ShuoContext(TwoImagePage())
+            context.request = UnsafeAssetRequest()
+            browser._launch = lambda: (type("Manager", (), {"stop": lambda _self: None})(), context)
+
+            result = browser.fetch_shuo(SHUO_URL)
+
+            metadata = json.loads((result.archive_dir / "metadata.json").read_text(encoding="utf-8"))
+            self.assertTrue(result.complete)
+            self.assertEqual(len(metadata["assets"]), 2)
+            self.assertTrue(all(asset["local_file"] is None for asset in metadata["assets"]))
+            self.assertTrue(all(asset["error"] for asset in metadata["assets"]))
+            self.assertEqual(list((result.archive_dir / "images").iterdir()), [])
+
+    def test_navigation_error_creates_safe_incomplete_shuo_diagnostics(self):
+        class NavigationErrorPage(FakePage):
+            def goto(self, url, **kwargs):
+                raise RuntimeError(f"navigation failed: {url}&token=navigation-secret")
+
+            def content(self):
+                raise AssertionError("content must not be read after failed navigation")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            browser = TaogubaBrowser(root / "profile", root / "exports", settle_ms=0)
+            context = ShuoContext(NavigationErrorPage())
+            browser._launch = lambda: (type("Manager", (), {"stop": lambda _self: None})(), context)
+
+            result = browser.fetch_shuo(SHUO_URL)
+
+            self.assertFalse(result.complete)
+            self.assertIn("导航失败", result.incomplete_reason)
+            self.assertNotIn("navigation-secret", result.incomplete_reason)
+            for filename in ("response.html", "rendered.html", "shuo.html", "metadata.json"):
+                self.assertTrue((result.archive_dir / filename).is_file())
+                self.assertNotIn(
+                    "navigation-secret",
+                    (result.archive_dir / filename).read_text(encoding="utf-8"),
+                )
 
     def test_exports_explicit_latest_replies_as_a_portable_daily_html(self):
         with tempfile.TemporaryDirectory() as temp_dir:

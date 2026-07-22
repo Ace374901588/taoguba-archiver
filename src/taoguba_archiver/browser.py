@@ -3,13 +3,14 @@ from __future__ import annotations
 import hashlib
 import json
 import mimetypes
+import re
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 from html import escape
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Comment
 
 from .core import (
     allocate_archive_dir,
@@ -105,6 +106,142 @@ def _response_bytes(response) -> bytes:
         return response.body() if response is not None else b""
     except Exception:
         return b""
+
+
+_SENSITIVE_ATTRIBUTE_MARKERS = (
+    "auth",
+    "cookie",
+    "credential",
+    "csrf",
+    "nonce",
+    "passwd",
+    "password",
+    "secret",
+    "session",
+    "token",
+    "xsrf",
+)
+_DIAGNOSTIC_URL_ATTRIBUTES = {
+    "action",
+    "cite",
+    "data-original",
+    "data-src",
+    "formaction",
+    "href",
+    "longdesc",
+    "poster",
+    "src",
+    "src2",
+    "xlink:href",
+}
+_DIAGNOSTIC_ABSOLUTE_URL = re.compile(r"https?://[^\s<>\"']+")
+
+
+def _contains_sensitive_marker(value: object) -> bool:
+    lowered = str(value).lower()
+    return any(marker in lowered for marker in _SENSITIVE_ATTRIBUTE_MARKERS)
+
+
+def _sanitize_diagnostic_url(value: object) -> str | None:
+    candidate = str(value).strip()
+    parsed = urlparse(candidate)
+    if parsed.scheme.lower() in {"data", "javascript"}:
+        return None
+    if parsed.username or parsed.password:
+        hostname = parsed.hostname or ""
+        try:
+            port = f":{parsed.port}" if parsed.port is not None else ""
+        except ValueError:
+            return None
+        parsed = parsed._replace(netloc=f"{hostname}{port}")
+    return parsed._replace(query="", fragment="").geturl()
+
+
+def _sanitize_urls_in_text(value: str) -> str:
+    def sanitize(match: re.Match) -> str:
+        return _sanitize_diagnostic_url(match.group(0)) or ""
+
+    return _DIAGNOSTIC_ABSOLUTE_URL.sub(sanitize, value)
+
+
+def _sanitize_diagnostic_html(html: str) -> str:
+    """Remove executable and credential-bearing content from saved diagnostics."""
+    soup = BeautifulSoup(html, "html.parser")
+    for comment in soup.find_all(string=lambda value: isinstance(value, Comment)):
+        comment.extract()
+    for tag in soup.select("script, style, iframe, object, embed"):
+        tag.decompose()
+    for tag in soup.find_all(True):
+        tag_name = str(tag.name).lower()
+        if tag_name == "meta":
+            identity = " ".join(
+                str(tag.get(attribute, ""))
+                for attribute in ("name", "http-equiv", "property", "id")
+            )
+            if _contains_sensitive_marker(identity) or str(
+                tag.get("http-equiv", "")
+            ).lower() == "refresh":
+                tag.decompose()
+                continue
+        if tag_name == "input":
+            identity = " ".join(
+                str(tag.get(attribute, ""))
+                for attribute in ("name", "id", "type", "autocomplete")
+            )
+            if _contains_sensitive_marker(identity):
+                tag.decompose()
+                continue
+            if str(tag.get("type", "")).lower() in {"hidden", "password"}:
+                tag.attrs.pop("value", None)
+        for attribute in list(tag.attrs):
+            lowered = attribute.lower()
+            if (
+                lowered.startswith("on")
+                or lowered == "style"
+                or _contains_sensitive_marker(lowered)
+            ):
+                tag.attrs.pop(attribute, None)
+                continue
+            if lowered == "srcset":
+                tag.attrs.pop(attribute, None)
+                continue
+            if lowered in _DIAGNOSTIC_URL_ATTRIBUTES:
+                sanitized = _sanitize_diagnostic_url(tag.attrs[attribute])
+                if sanitized:
+                    tag.attrs[attribute] = sanitized
+                else:
+                    tag.attrs.pop(attribute, None)
+    for text_node in soup.find_all(string=True):
+        sanitized = _sanitize_urls_in_text(str(text_node))
+        if sanitized != str(text_node):
+            text_node.replace_with(sanitized)
+    return str(soup)
+
+
+def _is_expected_shuo_final_url(final_url: object, expected_url: str) -> bool:
+    try:
+        return validate_shuo_url(str(final_url)) == expected_url
+    except (TypeError, ValueError):
+        return False
+
+
+def _same_image_origin_and_path(source_url: str, final_url: object) -> bool:
+    try:
+        source = urlparse(source_url)
+        final = urlparse(str(final_url))
+        source_port = source.port
+        final_port = final.port
+    except (TypeError, ValueError):
+        return False
+    if source.username or source.password or final.username or final.password:
+        return False
+    return (
+        source.scheme.lower() in {"http", "https"}
+        and source.scheme.lower() == final.scheme.lower()
+        and (source.hostname or "").lower() == (final.hostname or "").lower()
+        and source_port == final_port
+        and source.path == final.path
+    )
 
 
 def _render_offline_article_html(
@@ -295,26 +432,46 @@ class TaogubaBrowser:
         try:
             page = context.pages[0] if context.pages else context.new_page()
             fetched_at = datetime.now().astimezone()
-            response = page.goto(
-                normalized_url,
-                wait_until="domcontentloaded",
-                timeout=self.timeout_ms,
-            )
+            response = None
+            navigation_error = None
+            final_url_in_scope = False
+            rendered_html = ""
             try:
-                page.wait_for_selector(
-                    ".shuo-content", timeout=min(self.timeout_ms, 10_000)
+                response = page.goto(
+                    normalized_url,
+                    wait_until="domcontentloaded",
+                    timeout=self.timeout_ms,
                 )
-            except Exception:
-                pass
-            if self.settle_ms:
-                page.wait_for_timeout(self.settle_ms)
+                try:
+                    page.wait_for_selector(
+                        ".shuo-content", timeout=min(self.timeout_ms, 10_000)
+                    )
+                except Exception:
+                    pass
+                if self.settle_ms:
+                    page.wait_for_timeout(self.settle_ms)
+                final_url_in_scope = _is_expected_shuo_final_url(
+                    getattr(page, "url", None), normalized_url
+                )
+                rendered_html = page.content()
+            except Exception as exc:
+                navigation_error = (
+                    "页面导航失败（超时）"
+                    if type(exc).__name__ == "TimeoutError"
+                    else "页面导航失败"
+                )
 
-            raw_bytes = _response_bytes(response)
+            raw_html = _response_bytes(response).decode("utf-8", errors="replace")
+            safe_response_html = _sanitize_diagnostic_html(raw_html)
+            safe_rendered_html = _sanitize_diagnostic_html(rendered_html)
+            raw_bytes = safe_response_html.encode("utf-8")
+            rendered_bytes = safe_rendered_html.encode("utf-8")
             status_code = getattr(response, "status", None)
             response_headers = _safe_response_headers(response)
-            rendered_html = page.content()
-            rendered_bytes = rendered_html.encode("utf-8")
-            content = parse_shuo(rendered_html, page.url)
+            content = parse_shuo(
+                safe_rendered_html if final_url_in_scope else "",
+                normalized_url,
+            )
 
             archive_dir = allocate_archive_dir(
                 self.output_dir,
@@ -341,8 +498,22 @@ class TaogubaBrowser:
                         image_url, timeout=self.timeout_ms
                     )
                     if not image_response.ok:
-                        raise RuntimeError(f"HTTP {image_response.status}")
-                    content_type = image_response.headers.get("content-type")
+                        record["error"] = f"HTTP {image_response.status}"
+                        asset_manifest.append(record)
+                        continue
+                    if not _same_image_origin_and_path(
+                        image_url, getattr(image_response, "url", None)
+                    ):
+                        record["error"] = "图片响应 URL 超出允许范围"
+                        asset_manifest.append(record)
+                        continue
+                    content_type = str(
+                        image_response.headers.get("content-type", "")
+                    ).split(";", 1)[0].strip().lower()
+                    if not content_type.startswith("image/"):
+                        record["error"] = "响应内容不是图片"
+                        asset_manifest.append(record)
+                        continue
                     image_bytes = image_response.body()
                     filename = _asset_name(image_url, content_type, index)
                     (assets_dir / filename).write_bytes(image_bytes)
@@ -354,16 +525,20 @@ class TaogubaBrowser:
                         size=len(image_bytes),
                         sha256=_sha256(image_bytes),
                     )
-                except Exception as exc:
-                    record["error"] = str(exc)
+                except Exception:
+                    record["error"] = "图片下载失败"
                 asset_manifest.append(record)
 
-            output_html = render_shuo_html(content, local_images, page.url)
+            output_html = render_shuo_html(content, local_images, normalized_url)
             (archive_dir / "shuo.html").write_text(output_html, encoding="utf-8")
 
             reasons = []
             http_ok = status_code is not None and 200 <= status_code < 400
-            if not http_ok:
+            if navigation_error:
+                reasons.append(navigation_error)
+            elif not final_url_in_scope:
+                reasons.append("最终页面 URL 超出允许的说说范围")
+            if navigation_error is None and not http_ok:
                 reasons.append(f"HTTP {status_code if status_code is not None else '未知状态'}")
             if content.login_required:
                 reasons.append("页面提示登录后查看全文")
@@ -376,7 +551,7 @@ class TaogubaBrowser:
                 "source": "淘股吧",
                 "source_type": "shuo",
                 "source_url": normalized_url,
-                "final_url": page.url,
+                "final_url": normalized_url if final_url_in_scope else None,
                 "fetched_at": fetched_at.isoformat(),
                 "status": "complete" if complete else "incomplete",
                 "incomplete_reason": incomplete_reason,

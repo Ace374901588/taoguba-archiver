@@ -14,6 +14,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="使用独立 Chrome 登录态归档指定淘股吧文章到通用导出目录"
     )
     parser.add_argument("urls", nargs="*", help="一个或多个淘股吧文章 URL")
+    parser.add_argument("--shuo", help="明确提供的一条淘股吧说说 URL")
     parser.add_argument("--urls-file", type=Path, help="每行一个 URL 的 UTF-8 文本文件")
     parser.add_argument(
         "--reply-feed",
@@ -73,6 +74,18 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.login and args.headless:
         parser.error("--login 不能和 --headless 同时使用")
+    if args.shuo and args.login:
+        parser.error("--shuo 不能与 --login 同时使用；请先单独完成登录")
+    if args.shuo and (args.urls or args.urls_file):
+        parser.error("--shuo 不能与文章 URL 或 --urls-file 同时使用")
+    if args.shuo and args.reply_feed:
+        parser.error("--shuo 不能与 --reply-feed 同时使用")
+    if args.shuo and args.headless:
+        parser.error("--shuo 需要有界面 Chrome；淘股吧会拒绝无界面请求")
+    if args.shuo and (args.markdown or args.markdown_images or args.no_html):
+        parser.error("--shuo 固定生成独立 HTML，不支持 Markdown、--markdown-images 或 --no-html")
+    if args.shuo and args.include_author_replies:
+        parser.error("--shuo 不支持 --include-author-replies")
     if not args.login and args.markdown and not args.markdown_images:
         parser.error("使用 --markdown 时必须同时指定 --markdown-images")
     if not args.login and args.markdown_images and not args.markdown:
@@ -118,9 +131,24 @@ def main(argv: list[str] | None = None) -> int:
             return 3
         return 0
 
+    if args.shuo:
+        try:
+            result = service.archive_shuo(args.shuo, options)
+        except (ValueError, RuntimeError) as exc:
+            print(f"错误：{exc}", file=sys.stderr)
+            return 2
+        print(f"已归档说说：{result.archive_dir}")
+        if not result.complete:
+            print(
+                f"说说归档不完整：{result.incomplete_reason or '请查看 metadata.json'}",
+                file=sys.stderr,
+            )
+            return 3
+        return 0
+
     urls = _load_urls(args)
     if not urls:
-        parser.error("请提供文章 URL、--urls-file、--reply-feed 或 --login")
+        parser.error("请提供文章 URL、--urls-file、--shuo、--reply-feed 或 --login")
 
     try:
         result = service.archive(urls, options)

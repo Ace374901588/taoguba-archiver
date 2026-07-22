@@ -5,7 +5,12 @@ from pathlib import Path
 from threading import Event
 from typing import Callable
 
-from .browser import BrowserFetchResult, DailyReplyFetchResult, TaogubaBrowser
+from .browser import (
+    BrowserFetchResult,
+    DailyReplyFetchResult,
+    ShuoFetchResult,
+    TaogubaBrowser,
+)
 from .core import validate_article_url
 
 
@@ -137,3 +142,9 @@ class ArchiveService:
         return self._browser(options, validate_exports=False).fetch_latest_replies(
             feed_url, target_date
         )
+
+    def archive_shuo(
+        self, shuo_url: str, options: ArchiveOptions
+    ) -> ShuoFetchResult:
+        """Archive one explicitly supplied Taoguba shuo page."""
+        return self._browser(options, validate_exports=False).fetch_shuo(shuo_url)

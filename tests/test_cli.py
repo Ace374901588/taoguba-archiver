@@ -3,13 +3,14 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from taoguba_archiver.browser import BrowserFetchResult
+from taoguba_archiver.browser import BrowserFetchResult, ShuoFetchResult
 from taoguba_archiver.cli import main
 from taoguba_archiver.service import ArchiveBatchResult
 
 
 class FakeService:
     instances = []
+    shuo_complete = True
 
     def __init__(self):
         self.options = None
@@ -39,10 +40,21 @@ class FakeService:
             },
         )()
 
+    def archive_shuo(self, shuo_url, options):
+        self.shuo_url = shuo_url
+        self.options = options
+        return ShuoFetchResult(
+            shuo_url,
+            options.output_dir / "shuo",
+            type(self).shuo_complete,
+            None if type(self).shuo_complete else "fixture incomplete",
+        )
+
 
 class CliTests(unittest.TestCase):
     def setUp(self):
         FakeService.instances.clear()
+        FakeService.shuo_complete = True
 
     def test_additive_markdown_options_reach_service(self):
         with (
@@ -145,6 +157,47 @@ class CliTests(unittest.TestCase):
                     ]
                 )
         self.assertEqual(FakeService.instances, [])
+
+    def test_archives_one_explicit_shuo(self):
+        shuo_url = "https://shuo.tgb.cn/shuo/toViewShuo?shuoID=42"
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch("taoguba_archiver.cli.ArchiveService", FakeService),
+        ):
+            exit_code = main(["--output-dir", temp_dir, "--shuo", shuo_url])
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(FakeService.instances[0].shuo_url, shuo_url)
+
+    def test_rejects_shuo_mixed_with_incompatible_modes(self):
+        shuo_url = "https://shuo.tgb.cn/shuo/toViewShuo?shuoID=42"
+        invalid_arguments = (
+            ["--headless", "--shuo", shuo_url],
+            ["https://www.tgb.cn/a/example", "--shuo", shuo_url],
+            ["--urls-file", "urls.txt", "--shuo", shuo_url],
+            [
+                "--reply-feed",
+                "https://www.tgb.cn/user/blog/moreReplyMod?userID=1",
+                "--reply-date",
+                "2026-07-21",
+                "--shuo",
+                shuo_url,
+            ],
+            ["--markdown", "--markdown-images", "relative", "--shuo", shuo_url],
+            ["--markdown", "--markdown-images", "relative", "--no-html", "--shuo", shuo_url],
+        )
+        with patch("taoguba_archiver.cli.ArchiveService", FakeService):
+            for arguments in invalid_arguments:
+                with self.subTest(arguments=arguments), self.assertRaises(SystemExit):
+                    main(arguments)
+        self.assertEqual(FakeService.instances, [])
+
+    def test_returns_three_for_incomplete_shuo_export(self):
+        FakeService.shuo_complete = False
+        with patch("taoguba_archiver.cli.ArchiveService", FakeService):
+            exit_code = main(
+                ["--shuo", "https://shuo.tgb.cn/shuo/toViewShuo?shuoID=42"]
+            )
+        self.assertEqual(exit_code, 3)
 
 
 if __name__ == "__main__":

@@ -152,6 +152,16 @@ taoguba-archiver `
 需要有界面 Chrome（淘股吧会拒绝无界面请求）。若页面响应异常、登录失效或有目标跟帖未定位到，
 仍会保留 `response.html`、`rendered.html` 和 `metadata.json`，并标记为不完整。
 
+归档一条明确提供的淘股吧说说：
+
+```powershell
+taoguba-archiver --shuo "https://shuo.tgb.cn/shuo/toViewShuo?shuoID=42"
+```
+
+说说模式只接受这一条明确输入的说说 URL，不会把它与文章 URL、最新跟帖整理或批量 URL 文件混用。
+该模式需要有界面 Chrome，固定生成以下五类归档产物：`response.html`、`rendered.html`、`shuo.html`、
+`metadata.json` 和 `images/`。如果响应异常、登录失效或未解析到正文，仍会保留这些诊断产物并标记为不完整。
+
 其他常用参数：
 
 ```text

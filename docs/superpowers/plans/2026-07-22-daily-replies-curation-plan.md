@@ -13,7 +13,7 @@
 - 只处理用户明确提供的淘股吧“最新跟帖”URL，不发现用户或批量抓取。
 - 自动筛选必须保守：无法高置信度判断的内容一律保留。
 - 不记录、导出或读取 Cookie、令牌、`Set-Cookie` 或 Chrome Profile 内容。
-- 不增加远程请求；下载脚本只尝试读取当前本地归档中的图片。
+- 不增加远程请求；下载脚本只读取当前本地归档 `images/` 目录的相对图片，拒绝 `http`、`https` 和其他非本地 URL。
 - 常规归档仍包含 HTML、`metadata.json` 和 `images/`；仅用户下载的精简版本为单文件。
 - 保持 Windows/macOS 可用，不硬编码盘符、路径分隔符或系统字体。
 
@@ -122,7 +122,7 @@ Expected: FAIL，旧渲染器不接受 curation，旧元数据没有计数。
 
 - [ ] **Step 3: 接入筛选结果**
 
-在 `browser.py` 组装 `details` 后调用 `curate_daily_replies`。下载图片和渲染卡片只使用 `curation.details`；`DailyReplyFetchResult.reply_count` 仍使用 `len(details)`，保持 CLI 的“已定位总数”语义。元数据写入全部三种计数。
+在 `browser.py` 组装 `details` 后调用 `curate_daily_replies`。下载图片和渲染卡片只使用 `curation.details`；`DailyReplyFetchResult.reply_count` 仍使用 `len(details)`，保持 CLI 的“已定位总数”语义。元数据写入全部三种计数。调用 `_portable_fragment(..., strip_context_metadata=True)` 的关联回复必须继续只在 `.context-meta` 中展示一次作者和时间；筛选与导出不得恢复正文中的重复元数据。
 
 ```python
 curation = curate_daily_replies(details)
@@ -178,13 +178,15 @@ Expected: FAIL，旧 HTML 没有控件和下载脚本。
 
 - [ ] **Step 3: 实现本地交互**
 
-每个卡片增加唯一 `data-reply-url` 和删除按钮；顶部增加统计、撤销和下载按钮。脚本删除时只设置 `data-deleted="true"` 与 `hidden`，撤销时恢复最近一张卡片。下载时克隆根节点，移除控件、脚本和已删除卡片，再以内联 data URL 替换图片；单张图片失败时保留原 `src`，不得中止导出。
+每个卡片增加唯一 `data-reply-url` 和删除按钮；顶部增加统计、撤销和下载按钮。脚本删除时只设置 `data-deleted="true"` 与 `hidden`，撤销时恢复最近一张卡片。下载时克隆根节点，移除控件、脚本和已删除卡片，再以内联 data URL 替换图片；只允许处理形如 `images/<文件名>` 的相对本地来源，跳过 `http`、`https`、`data:`、绝对路径和其他来源。单张图片跳过或失败时保留原 `src`，不得中止导出，也不得发起远程请求。
 
 ```javascript
 async function inlineImages(root) {
   await Promise.all([...root.querySelectorAll('img')].map(async image => {
+    const source = image.getAttribute('src') || '';
+    if (!/^images\\/[^?#]+$/.test(source)) return;
     try {
-      const blob = await (await fetch(image.currentSrc || image.src)).blob();
+      const blob = await (await fetch(source)).blob();
       image.src = await new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => resolve(reader.result);
@@ -262,4 +264,3 @@ Run: `rg -n --glob '!exports/**' '(?i)(set-cookie|authorization:\\s*bearer|api[_
 只允许既有安全说明、测试模拟值和通用路径占位符；不得引入真实凭据或本机绝对路径。
 
 Run: `git add README.md tests/test_cli.py tests/test_browser_export.py tests/test_daily_replies.py src/taoguba_archiver/browser.py src/taoguba_archiver/daily_replies.py; git commit -m "docs: explain daily reply curation"`
-

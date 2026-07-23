@@ -301,11 +301,11 @@ class WebApp:
         with self._lock:
             busy = self._worker is not None and self._worker.is_alive()
             cancellation = self._cancellation
-        if busy and cancellation is None:
-            raise RuntimeError("当前任务不支持停止")
-        if busy and cancellation is not None:
-            cancellation.cancel()
-            self._event("正在安全停止；当前页面处理完成后生效")
+            if busy and cancellation is None:
+                raise RuntimeError("当前任务不支持停止")
+            if busy and cancellation is not None:
+                cancellation.cancel()
+                self._event_locked("正在安全停止；当前页面处理完成后生效")
         return self.state()
 
     def start_login(self) -> dict:

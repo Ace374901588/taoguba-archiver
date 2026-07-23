@@ -15,6 +15,12 @@ from taoguba_archiver.web import WebApp, serve
 
 class FakeService:
     def archive(self, urls, options, *, on_progress, cancellation):
+        if started := getattr(self, "archive_started", None):
+            started.set()
+        if release := getattr(self, "archive_release", None):
+            release.wait(timeout=2)
+        if cancellation.is_cancelled():
+            return ArchiveBatchResult(items=[], cancelled=True)
         item = BrowserFetchResult(urls[0], options.output_dir / "archive", True)
         on_progress(type("Progress", (), {"completed": 1, "total": 1, "url": urls[0], "complete": True})())
         return ArchiveBatchResult(items=[item])
@@ -454,6 +460,47 @@ class WebAppTests(unittest.TestCase):
         self.assertFalse(stale_cancellation.is_cancelled())
 
         self.app.service.shuo_release.set()
+        self.app.wait_for_idle(timeout=1)
+
+    def test_cancel_keeps_token_and_stop_event_in_the_worker_lock(self):
+        self.app.update_settings(
+            {
+                "output_dir": str(Path(self.temp_dir.name) / "exports"),
+                "export_html": True,
+                "export_markdown": False,
+                "markdown_image_mode": None,
+                "include_author_replies": False,
+            }
+        )
+        self.app.service.archive_started = threading.Event()
+        self.app.service.archive_release = threading.Event()
+        self.app.start_archive(["https://www.tgb.cn/a/example"])
+        self.assertTrue(self.app.service.archive_started.wait(timeout=1))
+
+        token = self.app._cancellation
+        self.assertIsNotNone(token)
+        token_lock_states = []
+        event_lock_states = []
+        original_cancel = token.cancel
+        original_event_locked = self.app._event_locked
+
+        def record_cancel():
+            token_lock_states.append(self.app._lock.locked())
+            original_cancel()
+
+        def record_event(message):
+            if message == "正在安全停止；当前页面处理完成后生效":
+                event_lock_states.append(self.app._lock.locked())
+            original_event_locked(message)
+
+        token.cancel = record_cancel
+        self.app._event_locked = record_event
+
+        self.app.cancel()
+
+        self.assertEqual(token_lock_states, [True])
+        self.assertEqual(event_lock_states, [True])
+        self.app.service.archive_release.set()
         self.app.wait_for_idle(timeout=1)
 
     def test_local_server_serves_browser_workspace_on_loopback(self):

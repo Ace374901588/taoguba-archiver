@@ -1,9 +1,11 @@
+import json
 import tempfile
 import threading
 import tomllib
 import unittest
-from urllib.request import urlopen
 from pathlib import Path
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
 from taoguba_archiver.browser import BrowserFetchResult
 from taoguba_archiver.service import ArchiveBatchResult
@@ -32,8 +34,13 @@ class FakeService:
         )()
 
     def archive_shuo(self, shuo_url, options):
+        self.shuo_calls = getattr(self, "shuo_calls", 0) + 1
         self.shuo_url = shuo_url
         self.shuo_thread = threading.current_thread()
+        if started := getattr(self, "shuo_started", None):
+            started.set()
+        if release := getattr(self, "shuo_release", None):
+            release.wait(timeout=2)
         complete = getattr(self, "shuo_complete", True)
         return type(
             "ShuoResult",
@@ -46,6 +53,11 @@ class FakeService:
                 "login_required": getattr(self, "shuo_login_required", False),
             },
         )()
+
+    def login(self, options, *, wait_for_confirmation):
+        if started := getattr(self, "login_started", None):
+            started.set()
+        wait_for_confirmation()
 
 
 class WebAppTests(unittest.TestCase):
@@ -251,6 +263,199 @@ class WebAppTests(unittest.TestCase):
 
         self.assertEqual(self.app.state()["login_status"], "登录失效；请重新登录")
 
+    def test_shuo_api_requires_same_origin_json_and_workspace_token(self):
+        self.app.update_settings(
+            {
+                "output_dir": str(Path(self.temp_dir.name) / "exports"),
+                "export_html": True,
+                "export_markdown": False,
+                "markdown_image_mode": None,
+                "include_author_replies": False,
+            }
+        )
+        server = serve(port=0, open_browser=False)
+        server.RequestHandlerClass.app = self.app
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        endpoint = f"http://127.0.0.1:{server.server_port}/api/shuo"
+        origin = f"http://127.0.0.1:{server.server_port}"
+        body = json.dumps(
+            {
+                "shuo_url": (
+                    "https://shuo.tgb.cn/shuo/toViewShuo?"
+                    "shuoID=2079570335635705862"
+                )
+            }
+        ).encode("utf-8")
+
+        def post(headers):
+            request = Request(endpoint, data=body, headers=headers, method="POST")
+            return urlopen(request, timeout=1)
+
+        try:
+            invalid_headers = [
+                {
+                    "Content-Type": "application/json",
+                    "X-Taoguba-Session-Token": self.app.session_token,
+                },
+                {
+                    "Origin": "https://attacker.example",
+                    "Content-Type": "application/json",
+                    "X-Taoguba-Session-Token": self.app.session_token,
+                },
+                {
+                    "Origin": origin,
+                    "X-Taoguba-Session-Token": self.app.session_token,
+                },
+                {
+                    "Origin": origin,
+                    "Content-Type": "text/plain",
+                    "X-Taoguba-Session-Token": self.app.session_token,
+                },
+                {
+                    "Origin": origin,
+                    "Content-Type": "application/json",
+                },
+                {
+                    "Origin": origin,
+                    "Content-Type": "application/json",
+                    "X-Taoguba-Session-Token": "wrong-token",
+                },
+            ]
+            for headers in invalid_headers:
+                with self.subTest(headers=headers):
+                    with self.assertRaises(HTTPError):
+                        post(headers)
+            self.assertEqual(getattr(self.app.service, "shuo_calls", 0), 0)
+
+            with post(
+                {
+                    "Origin": origin,
+                    "Content-Type": "application/json; charset=utf-8",
+                    "X-Taoguba-Session-Token": self.app.session_token,
+                }
+            ) as response:
+                self.assertEqual(response.status, 200)
+            self.app.wait_for_idle(timeout=1)
+            self.assertEqual(self.app.service.shuo_calls, 1)
+        finally:
+            server.shutdown()
+            thread.join(timeout=1)
+            server.server_close()
+
+    def test_each_workspace_uses_a_distinct_ephemeral_session_token(self):
+        other_app = WebApp(
+            settings_store=SettingsStore(
+                Path(self.temp_dir.name) / "other-settings.json"
+            ),
+            service=FakeService(),
+            profile_dir=Path(self.temp_dir.name) / "other-profile",
+        )
+
+        self.assertGreaterEqual(len(self.app.session_token), 32)
+        self.assertNotEqual(self.app.session_token, other_app.session_token)
+        self.assertNotIn("session_token", self.app.state())
+
+    def test_shuo_worker_reservation_is_atomic(self):
+        self.app.update_settings(
+            {
+                "output_dir": str(Path(self.temp_dir.name) / "exports"),
+                "export_html": True,
+                "export_markdown": False,
+                "markdown_image_mode": None,
+                "include_author_replies": False,
+            }
+        )
+        shuo_url = (
+            "https://shuo.tgb.cn/shuo/toViewShuo?"
+            "shuoID=2079570335635705862"
+        )
+        callers_ready = threading.Barrier(2)
+        original_options = self.app._options
+
+        def synchronized_options(*, require_output=True):
+            options = original_options(require_output=require_output)
+            callers_ready.wait(timeout=1)
+            return options
+
+        self.app._options = synchronized_options
+        self.app.service.shuo_started = threading.Event()
+        self.app.service.shuo_release = threading.Event()
+        outcomes = []
+
+        def start():
+            try:
+                self.app.start_shuo(shuo_url)
+                outcomes.append("started")
+            except RuntimeError:
+                outcomes.append("rejected")
+
+        callers = [threading.Thread(target=start) for _ in range(2)]
+        for caller in callers:
+            caller.start()
+        for caller in callers:
+            caller.join(timeout=2)
+
+        self.assertEqual(sorted(outcomes), ["rejected", "started"])
+        self.assertTrue(self.app.service.shuo_started.wait(timeout=1))
+        self.assertEqual(self.app.service.shuo_calls, 1)
+        self.app.service.shuo_release.set()
+        self.app.wait_for_idle(timeout=1)
+
+    def test_shuo_is_rejected_and_disabled_while_login_is_pending(self):
+        self.app.update_settings(
+            {
+                "output_dir": str(Path(self.temp_dir.name) / "exports"),
+                "export_html": True,
+                "export_markdown": False,
+                "markdown_image_mode": None,
+                "include_author_replies": False,
+            }
+        )
+        self.app.service.login_started = threading.Event()
+        self.app.start_login()
+        self.assertTrue(self.app.service.login_started.wait(timeout=1))
+
+        with self.assertRaisesRegex(RuntimeError, "登录"):
+            self.app.start_shuo(
+                "https://shuo.tgb.cn/shuo/toViewShuo?"
+                "shuoID=2079570335635705862"
+            )
+
+        self.app.confirm_login()
+        self.app._login_worker.join(timeout=1)
+
+    def test_shuo_clears_stale_cancellation_and_cannot_be_stopped(self):
+        self.app.update_settings(
+            {
+                "output_dir": str(Path(self.temp_dir.name) / "exports"),
+                "export_html": True,
+                "export_markdown": False,
+                "markdown_image_mode": None,
+                "include_author_replies": False,
+            }
+        )
+        self.app.start_archive(["https://www.tgb.cn/a/example"])
+        self.app.wait_for_idle(timeout=1)
+        stale_cancellation = self.app._cancellation
+        self.app.service.shuo_started = threading.Event()
+        self.app.service.shuo_release = threading.Event()
+
+        self.app.start_shuo(
+            "https://shuo.tgb.cn/shuo/toViewShuo?"
+            "shuoID=2079570335635705862"
+        )
+        self.assertTrue(self.app.service.shuo_started.wait(timeout=1))
+
+        self.assertIsNone(self.app._cancellation)
+        self.assertFalse(self.app.state()["can_cancel"])
+        with self.assertRaisesRegex(RuntimeError, "不支持停止"):
+            self.app.cancel()
+        self.assertFalse(stale_cancellation.is_cancelled())
+
+        self.app.service.shuo_release.set()
+        self.app.wait_for_idle(timeout=1)
+
     def test_local_server_serves_browser_workspace_on_loopback(self):
         server = serve(port=0, open_browser=False)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -265,6 +470,7 @@ class WebAppTests(unittest.TestCase):
             self.assertIn('id="replyFeed"', page)
             self.assertIn('id="replyDate" type="date"', page)
             self.assertIn('id="shuoUrl"', page)
+            self.assertIn("X-Taoguba-Session-Token", page)
             self.assertIn('class="app-shell"', page)
             self.assertIn('aria-live="polite"', page)
             self.assertIn('id="selectOutput"', page)
@@ -309,6 +515,8 @@ class WebAppTests(unittest.TestCase):
                 ".log{background:#fff;color:#0f172a;border-color:#cbd5e1;padding:9px}",
                 page,
             )
+            self.assertIn("state.busy||state.login_pending", page)
+            self.assertIn("$('stop').hidden=!state.can_cancel", page)
         finally:
             server.shutdown()
             thread.join(timeout=1)

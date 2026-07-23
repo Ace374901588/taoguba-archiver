@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import hmac
 import json
+import secrets
 import threading
 import webbrowser
 from collections.abc import Callable
@@ -64,13 +66,13 @@ main{max-width:1240px;margin:auto;padding:28px}.top{display:flex;justify-content
 <article class="card"><h2>输出格式</h2><label class="check"><input id="html" type="checkbox">HTML 原文</label><label class="check"><input id="markdown" type="checkbox">Markdown 副本</label><div id="markdownModeField" class="field" hidden><label for="markdownMode">Markdown 图片方式</label><select id="markdownMode"><option value="relative" selected>相对路径（便于随导出包移动）</option><option value="source">保留原图 URL</option><option value="embed">内嵌图片（文件较大）</option></select></div></article>
 <article class="card wide actions"><span id="reason" class="hint">配置完成后开始归档</span><button id="stop" class="stop" hidden>停止</button><button id="archive" class="primary">开始归档</button></article></div></section></main>
 <script>
-const $=id=>document.getElementById(id);let state={};
+const sessionToken=__SESSION_TOKEN__;const $=id=>document.getElementById(id);let state={};
 function payload(){return{output_dir:$('output').value,export_html:$('html').checked,export_markdown:$('markdown').checked,markdown_image_mode:$('markdownMode').value||null,include_author_replies:$('replies').checked}}
 function latestReplyPayload(){return{...payload(),feed_url:$('replyFeed').value.trim(),target_date:$('replyDate').value}}
-function archiveUnavailableReason(){if(state.busy)return '归档正在运行';if(!$('urls').value.trim())return '请输入至少一个文章链接';if(!$('output').value.trim())return '请选择保存位置';if(!$('html').checked&&!$('markdown').checked)return '至少选择一种输出格式';return ''}
+function archiveUnavailableReason(){if(state.busy||state.login_pending)return '浏览器任务正在运行';if(!$('urls').value.trim())return '请输入至少一个文章链接';if(!$('output').value.trim())return '请选择保存位置';if(!$('html').checked&&!$('markdown').checked)return '至少选择一种输出格式';return ''}
 function updateArchiveAvailability(){const reason=archiveUnavailableReason();$('archive').disabled=Boolean(reason);if(reason)$('reason').textContent='无法开始归档：'+reason;return reason}
-async function api(path,body){const r=await fetch(path,{method:body?'POST':'GET',headers:{'content-type':'application/json'},body:body?JSON.stringify(body):undefined});const data=await r.json();if(!r.ok)throw Error(data.error);return data}
-function render(next,syncSettings=!state.settings){state=next;const s=state.settings;if(syncSettings){$('output').value=s.output_dir||'';$('html').checked=s.export_html;$('markdown').checked=s.export_markdown;$('markdownMode').value=s.markdown_image_mode||'relative';$('markdownModeField').hidden=!s.export_markdown;$('replies').checked=s.include_author_replies}$('loginStatus').textContent=state.login_status;$('login').textContent=state.login_status==='已登录'?'重新登录':'登录淘股吧';$('confirmLogin').hidden=!state.login_pending;$('archive').disabled=state.busy;$('archiveShuo').disabled=state.busy;$('collectReplies').disabled=state.busy;$('stop').hidden=!state.busy;$('events').textContent=state.events.length?state.events.map(e=>`[${e.time}] ${e.message}`).join('\n'):'等待操作…';$('events').scrollTop=$('events').scrollHeight}
+async function api(path,body){const r=await fetch(path,{method:body?'POST':'GET',headers:{'content-type':'application/json','X-Taoguba-Session-Token':sessionToken},body:body?JSON.stringify(body):undefined});const data=await r.json();if(!r.ok)throw Error(data.error);return data}
+function render(next,syncSettings=!state.settings){state=next;const s=state.settings;const browserBusy=state.busy||state.login_pending;if(syncSettings){$('output').value=s.output_dir||'';$('html').checked=s.export_html;$('markdown').checked=s.export_markdown;$('markdownMode').value=s.markdown_image_mode||'relative';$('markdownModeField').hidden=!s.export_markdown;$('replies').checked=s.include_author_replies}$('loginStatus').textContent=state.login_status;$('login').textContent=state.login_status==='已登录'?'重新登录':'登录淘股吧';$('login').disabled=browserBusy;$('confirmLogin').hidden=!state.login_pending;$('archive').disabled=browserBusy;$('archiveShuo').disabled=browserBusy;$('collectReplies').disabled=browserBusy;$('stop').hidden=!state.can_cancel;$('events').textContent=state.events.length?state.events.map(e=>`[${e.time}] ${e.message}`).join('\n'):'等待操作…';$('events').scrollTop=$('events').scrollHeight}
 async function refresh(){try{render(await api('/api/state'));updateArchiveAvailability()}catch(e){$('reason').textContent=e.message}}
 async function save(){try{render(await api('/api/settings',payload()),true);if(!updateArchiveAvailability())$('reason').textContent='配置已保存'}catch(e){$('reason').textContent=e.message}}
 for(const id of ['output','html','markdownMode','replies'])$(id).addEventListener('change',save);
@@ -117,12 +119,38 @@ class WebApp:
         self._cancellation: CancellationToken | None = None
         self._login_decision = threading.Event()
         self._login_confirmed = False
+        self.session_token = secrets.token_urlsafe(32)
         self.login_status = "已登录" if self.settings.login_confirmed else "未登录"
+
+    def _event_locked(self, message: str) -> None:
+        self._events.append({"time": datetime.now().strftime("%H:%M:%S"), "message": message})
+        self._events = self._events[-300:]
 
     def _event(self, message: str) -> None:
         with self._lock:
-            self._events.append({"time": datetime.now().strftime("%H:%M:%S"), "message": message})
-            self._events = self._events[-300:]
+            self._event_locked(message)
+
+    def index_html(self) -> str:
+        return INDEX_HTML.replace("__SESSION_TOKEN__", json.dumps(self.session_token))
+
+    def _start_browser_worker(
+        self,
+        *,
+        target,
+        args: tuple,
+        start_message: str,
+        cancellation: CancellationToken | None = None,
+    ) -> None:
+        worker = threading.Thread(target=target, args=args, daemon=True)
+        with self._lock:
+            if self._worker is not None and self._worker.is_alive():
+                raise RuntimeError("归档正在运行")
+            if self._login_worker is not None and self._login_worker.is_alive():
+                raise RuntimeError("登录正在进行，请先完成登录")
+            self._cancellation = cancellation
+            self._event_locked(start_message)
+            self._worker = worker
+            worker.start()
 
     def _options(self, *, require_output: bool = True) -> ArchiveOptions:
         if require_output and not self.settings.output_dir:
@@ -138,10 +166,12 @@ class WebApp:
 
     def state(self) -> dict:
         with self._lock:
+            busy = self._worker is not None and self._worker.is_alive()
             return {
                 "settings": asdict(self.settings),
                 "events": list(self._events),
-                "busy": self._worker is not None and self._worker.is_alive(),
+                "busy": busy,
+                "can_cancel": busy and self._cancellation is not None,
                 "login_pending": self._login_worker is not None and self._login_worker.is_alive(),
                 "login_status": self.login_status,
             }
@@ -182,55 +212,42 @@ class WebApp:
         return state
 
     def start_archive(self, urls: list[str]) -> dict:
-        with self._lock:
-            if self._worker is not None and self._worker.is_alive():
-                raise RuntimeError("归档正在运行")
         normalized_urls = [validate_article_url(url) for url in urls]
         normalized_urls = list(dict.fromkeys(normalized_urls))
         if not normalized_urls:
             raise ValueError("请至少提供一个淘股吧文章 URL")
         options = self._options()
         cancellation = CancellationToken()
-        self._cancellation = cancellation
-        self._event(f"开始归档：共 {len(normalized_urls)} 篇文章")
-        self._worker = threading.Thread(
-            target=self._archive, args=(normalized_urls, options, cancellation), daemon=True
+        self._start_browser_worker(
+            target=self._archive,
+            args=(normalized_urls, options, cancellation),
+            start_message=f"开始归档：共 {len(normalized_urls)} 篇文章",
+            cancellation=cancellation,
         )
-        self._worker.start()
         return self.state()
 
     def start_latest_replies(self, feed_url: str, target_date: str) -> dict:
-        with self._lock:
-            if self._worker is not None and self._worker.is_alive():
-                raise RuntimeError("归档正在运行")
         normalized_feed_url = validate_reply_feed_url(feed_url)
         try:
             datetime.strptime(target_date, "%Y-%m-%d")
         except ValueError as exc:
             raise ValueError("日期必须是 YYYY-MM-DD，例如 2026-07-21") from exc
         options = self._options()
-        self._event(f"开始整理最新跟帖：{target_date}")
-        self._worker = threading.Thread(
+        self._start_browser_worker(
             target=self._collect_latest_replies,
             args=(normalized_feed_url, target_date, options),
-            daemon=True,
+            start_message=f"开始整理最新跟帖：{target_date}",
         )
-        self._worker.start()
         return self.state()
 
     def start_shuo(self, shuo_url: str) -> dict:
-        with self._lock:
-            if self._worker is not None and self._worker.is_alive():
-                raise RuntimeError("归档正在运行")
         normalized_url = validate_shuo_url(shuo_url)
         options = self._options()
-        self._event("开始归档说说")
-        self._worker = threading.Thread(
+        self._start_browser_worker(
             target=self._archive_shuo,
             args=(normalized_url, options),
-            daemon=True,
+            start_message="开始归档说说",
         )
-        self._worker.start()
         return self.state()
 
     def _archive(self, urls: list[str], options: ArchiveOptions, cancellation: CancellationToken) -> None:
@@ -281,8 +298,13 @@ class WebApp:
             self._event(f"说说归档失败：{exc}")
 
     def cancel(self) -> dict:
-        if self._cancellation is not None:
-            self._cancellation.cancel()
+        with self._lock:
+            busy = self._worker is not None and self._worker.is_alive()
+            cancellation = self._cancellation
+        if busy and cancellation is None:
+            raise RuntimeError("当前任务不支持停止")
+        if busy and cancellation is not None:
+            cancellation.cancel()
             self._event("正在安全停止；当前页面处理完成后生效")
         return self.state()
 
@@ -290,11 +312,14 @@ class WebApp:
         with self._lock:
             if self._login_worker is not None and self._login_worker.is_alive():
                 raise RuntimeError("登录窗口已打开")
-        self._login_decision.clear()
-        self._login_confirmed = False
-        self.login_status = "正在打开登录窗口…"
-        self._login_worker = threading.Thread(target=self._login, daemon=True)
-        self._login_worker.start()
+            if self._worker is not None and self._worker.is_alive():
+                raise RuntimeError("归档正在运行，请等待完成")
+            self._login_decision.clear()
+            self._login_confirmed = False
+            self._cancellation = None
+            self.login_status = "正在打开登录窗口…"
+            self._login_worker = threading.Thread(target=self._login, daemon=True)
+            self._login_worker.start()
         return self.state()
 
     def _login(self) -> None:
@@ -347,9 +372,10 @@ class WebHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.path == "/":
-            body = INDEX_HTML.encode("utf-8")
+            body = self.app.index_html().encode("utf-8")
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -360,6 +386,28 @@ class WebHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         try:
+            if self.path == "/api/shuo":
+                expected_host = f"127.0.0.1:{self.server.server_port}"
+                expected_origin = f"http://{expected_host}"
+                if (
+                    self.headers.get("Host") != expected_host
+                    or self.headers.get("Origin") != expected_origin
+                ):
+                    self._json({"error": "请求来源无效"}, HTTPStatus.FORBIDDEN)
+                    return
+                content_type = self.headers.get("Content-Type", "").split(";", 1)[0]
+                if content_type.strip().lower() != "application/json":
+                    self._json(
+                        {"error": "请求内容类型必须是 application/json"},
+                        HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
+                    )
+                    return
+                supplied_token = self.headers.get("X-Taoguba-Session-Token", "")
+                if not supplied_token or not hmac.compare_digest(
+                    supplied_token, self.app.session_token
+                ):
+                    self._json({"error": "工作台令牌无效"}, HTTPStatus.FORBIDDEN)
+                    return
             payload = self._payload()
             if self.path == "/api/settings":
                 result = self.app.update_settings(payload)

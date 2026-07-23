@@ -12,9 +12,9 @@ from .core import LOGIN_MARKERS
 _SHUO_HOST = "shuo.tgb.cn"
 _SHUO_PATH = "/shuo/toViewShuo"
 _TITLE_SELECTORS = (".shuo-title",)
-_AUTHOR_SELECTORS = (".shuo-author",)
-_TIME_SELECTORS = (".shuo-time",)
-_BODY_SELECTORS = (".shuo-content",)
+_AUTHOR_SELECTORS = (".shuo-author", ".authorUsername a")
+_TIME_SELECTORS = (".shuo-time", ".authorTime")
+_BODY_SELECTORS = (".shuo-content", ".shuoTextinfo .shuoTexts")
 _IMAGE_ATTRIBUTES = ("data-original", "data-src", "src2", "src")
 
 
@@ -114,9 +114,11 @@ def _sanitize_body(body, page_url: str) -> tuple[str, list[str]]:
 def parse_shuo(html: str, page_url: str) -> ShuoContent:
     """Parse only the title, metadata, and body of one supplied shuo page."""
     soup = BeautifulSoup(html, "html.parser")
-    title = _clean_text(_first(soup, _TITLE_SELECTORS)) or "无标题"
     author = _clean_text(_first(soup, _AUTHOR_SELECTORS)) or None
     published_at = _clean_text(_first(soup, _TIME_SELECTORS)) or None
+    title = _clean_text(_first(soup, _TITLE_SELECTORS)) or (
+        f"{author}的说说" if author else "淘股吧说说"
+    )
     body = _first(soup, _BODY_SELECTORS)
     body_html, image_urls = _sanitize_body(body, page_url) if body is not None else ("", [])
     page_text = soup.get_text(" ", strip=True)

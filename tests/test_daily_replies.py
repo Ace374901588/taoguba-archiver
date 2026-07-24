@@ -1,12 +1,26 @@
 import unittest
 
 from taoguba_archiver.daily_replies import (
+    DailyReplyDetail,
+    LatestReplyEntry,
+    curate_daily_replies,
     parse_associated_reply,
     parse_latest_reply_feed,
     resolve_quote_image_placeholder,
     render_daily_replies_html,
     validate_reply_feed_url,
 )
+
+
+def make_detail(text: str, index: int) -> DailyReplyDetail:
+    entry = LatestReplyEntry(
+        published_at=f"2026-07-21 22:{index:02d}",
+        text=text,
+        article_title="测试主帖",
+        article_url="https://www.tgb.cn/a/article-one",
+        reply_url=f"https://www.tgb.cn/a/article-one/{index}#{index}",
+    )
+    return DailyReplyDetail(entry, text, f"<p>{text}</p>", None, [])
 
 
 FEED_HTML = """
@@ -68,6 +82,25 @@ ORIGINAL_COMMENT_WITH_IMAGE_HTML = """
 
 
 class LatestReplyFeedTests(unittest.TestCase):
+    def test_curates_only_high_confidence_low_value_replies(self):
+        details = [
+            make_detail("收到", 1),
+            make_detail("哈哈！！", 2),
+            make_detail("600519 明天看承接", 3),
+            make_detail("市场情绪感觉不太好", 4),
+            make_detail("感谢", 5),
+            make_detail("感谢", 6),
+        ]
+
+        result = curate_daily_replies(details)
+
+        self.assertEqual(result.original_count, 6)
+        self.assertEqual(result.automatic_filtered_count, 4)
+        self.assertEqual(
+            [item.text for item in result.details],
+            ["600519 明天看承接", "市场情绪感觉不太好"],
+        )
+
     def test_validates_only_explicit_latest_reply_feed_urls(self):
         self.assertEqual(
             validate_reply_feed_url(

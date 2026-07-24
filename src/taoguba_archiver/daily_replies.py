@@ -60,6 +60,56 @@ class DailyReplyDetail:
     target_found: bool = True
 
 
+@dataclass(frozen=True)
+class DailyReplyCuration:
+    details: list[DailyReplyDetail]
+    original_count: int
+    automatic_filtered_count: int
+
+
+_LOW_VALUE_REPLIES = frozenset(
+    {
+        "收到",
+        "感谢",
+        "谢谢",
+        "哈哈",
+        "顶",
+        "学习了",
+        "路过",
+        "打卡",
+        "支持",
+        "厉害",
+        "牛",
+        "赞",
+        "加油",
+        "ok",
+        "666",
+    }
+)
+
+
+def _normalise_reply_text(text: str) -> str:
+    return re.sub(r"[\s\W_]+", "", text, flags=re.UNICODE).casefold()
+
+
+def _is_low_value_reply(text: str) -> bool:
+    normalised = _normalise_reply_text(text)
+    return not normalised or normalised in _LOW_VALUE_REPLIES
+
+
+def curate_daily_replies(details: list[DailyReplyDetail]) -> DailyReplyCuration:
+    """Discard only obvious acknowledgements and immediately repeated replies."""
+    kept: list[DailyReplyDetail] = []
+    previous_kept_text: str | None = None
+    for detail in details:
+        normalised = _normalise_reply_text(detail.text)
+        if _is_low_value_reply(detail.text) or normalised == previous_kept_text:
+            continue
+        kept.append(detail)
+        previous_kept_text = normalised
+    return DailyReplyCuration(kept, len(details), len(details) - len(kept))
+
+
 def validate_reply_feed_url(url: str) -> str:
     """Accept only an explicitly supplied Taoguba latest-replies page."""
     candidate = url.strip()

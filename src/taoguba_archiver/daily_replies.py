@@ -367,12 +367,12 @@ def _portable_fragment(
 def render_daily_replies_html(
     author: str | None,
     date: str,
-    details: list[DailyReplyDetail],
+    curation: DailyReplyCuration,
     local_images: dict[str, str],
 ) -> str:
     safe_author = escape(author or "未知作者")
     cards = []
-    for detail in details:
+    for detail in curation.details:
         entry = detail.entry
         time_label = entry.published_at.split(" ", 1)[-1]
         body = _portable_fragment(detail.html, entry.reply_url, local_images)
@@ -406,4 +406,4 @@ def render_daily_replies_html(
 <html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">
 <title>{safe_author} · {escape(date)} 跟帖整理</title><style>
 :root{{--page:#f5f7fb;--surface:#fff;--ink:#172033;--muted:#64748b;--line:#dce3ed;--brand:#0f766e;--quote:#eefbf8}}*{{box-sizing:border-box}}body{{margin:0;background:var(--page);color:var(--ink);font:15px/1.72 system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif}}main{{width:min(100% - 48px,1440px);margin:24px auto 48px}}header.page{{padding:24px 30px;background:var(--surface);border:1px solid var(--line);border-top:4px solid var(--brand);border-radius:14px}}h1{{margin:0;font-size:clamp(24px,3vw,34px);letter-spacing:-.02em}}.summary{{margin:8px 0 0;color:var(--muted)}}a{{color:var(--brand);text-decoration:none}}a:hover{{text-decoration:underline}}.timeline-item{{display:grid;grid-template-columns:88px minmax(0,1fr);gap:0}}.timeline-rail{{position:relative;padding:20px 20px 0 0;text-align:right;color:var(--muted);font-size:13px;font-variant-numeric:tabular-nums}}.timeline-rail:after{{content:"";position:absolute;right:0;top:38px;bottom:-1px;width:1px;background:var(--line)}}.timeline-node{{position:absolute;right:-5px;top:24px;width:10px;height:10px;border:2px solid var(--page);border-radius:50%;background:var(--brand)}}.timeline-content{{min-width:0;padding:18px 0 22px 30px;border-bottom:1px solid var(--line)}}.reply-meta{{display:flex;flex-wrap:wrap;gap:4px 14px;align-items:center;color:var(--muted);font-size:13px}}.reply-meta>a:first-child{{font-weight:680}}.source{{margin-left:auto;font-size:12px}}.reply-body{{margin-top:10px;overflow-wrap:anywhere}}.reply-body p,.context p{{margin:0 0 .75em}}.reply-body>:last-child,.context>:last-child{{margin-bottom:0}}img{{display:block;max-width:100%;height:auto;margin:12px 0;border-radius:8px}}.context{{margin-top:14px;padding:10px 14px;border-left:3px solid #2dd4bf;background:var(--quote);font-size:14px}}.label{{margin:0;color:var(--brand);font-size:12px;font-weight:750}}.context-meta{{margin:1px 0 7px;color:var(--muted);font-size:12px}}.empty{{margin:18px 0;padding:22px 30px;background:#fff;border:1px solid var(--line);border-radius:12px;color:var(--muted)}}@media(max-width:720px){{main{{width:min(100% - 24px,1440px);margin:12px auto 28px}}header.page{{padding:20px}}.timeline-item{{grid-template-columns:60px minmax(0,1fr)}}.timeline-rail{{padding-right:15px}}.timeline-content{{padding-left:20px}}.source{{margin-left:0}}}}
-</style></head><body><main><header class=\"page\"><h1>{safe_author} · {escape(date)} 跟帖整理</h1><p class=\"summary\">共 {len(details)} 条；仅保留目标跟帖及其页面内直接关联的回复。</p></header>{empty}{''.join(cards)}</main></body></html>"""
+</style></head><body><main><header class=\"page\"><h1>{safe_author} · {escape(date)} 跟帖整理</h1><p class=\"summary\" data-original-count=\"{curation.original_count}\" data-automatic-filtered-count=\"{curation.automatic_filtered_count}\">原始 {curation.original_count} 条 · 自动筛除 {curation.automatic_filtered_count} 条 · 当前保留 {len(curation.details)} 条</p></header>{empty}{''.join(cards)}</main></body></html>"""

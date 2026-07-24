@@ -22,6 +22,7 @@ from .core import (
 )
 from .daily_replies import (
     DailyReplyDetail,
+    curate_daily_replies,
     is_content_image_url,
     parse_associated_reply,
     parse_latest_reply_feed,
@@ -726,6 +727,7 @@ class TaogubaBrowser:
 
             details = [details_by_url[entry.reply_url] for entry in entries if entry.reply_url in details_by_url]
             missing_targets = len(entries) - len(details)
+            curation = curate_daily_replies(details)
             fetched_at = datetime.now().astimezone()
             archive_dir = allocate_archive_dir(
                 self.output_dir, "latest-replies", f"{author or '未知作者'}-{target_date}",
@@ -740,7 +742,7 @@ class TaogubaBrowser:
 
             local_images: dict[str, str] = {}
             all_image_urls = [
-                image_url for detail in details for image_url in (
+                image_url for detail in curation.details for image_url in (
                     detail.image_urls + (detail.context.image_urls if detail.context else [])
                 ) if is_content_image_url(image_url)
             ]
@@ -762,7 +764,7 @@ class TaogubaBrowser:
                     record["error"] = str(exc)
                 asset_manifest.append(record)
 
-            output_html = render_daily_replies_html(author, target_date, details, local_images)
+            output_html = render_daily_replies_html(author, target_date, curation, local_images)
             (archive_dir / "daily-replies.html").write_text(output_html, encoding="utf-8")
             reasons = []
             if not feed_http_ok:
@@ -779,7 +781,10 @@ class TaogubaBrowser:
                 "schema_version": 1, "source": "淘股吧", "source_url": normalized_feed_url,
                 "target_date": target_date, "fetched_at": fetched_at.isoformat(),
                 "status": "complete" if complete else "incomplete", "incomplete_reason": incomplete_reason,
-                "author": author, "reply_count": len(details), "http_status": feed_status,
+                "author": author, "reply_count": len(details),
+                "original_reply_count": curation.original_count,
+                "automatic_filtered_count": curation.automatic_filtered_count,
+                "retained_reply_count": len(curation.details), "http_status": feed_status,
                 "response_headers": feed_headers, "response_sha256": _sha256(feed_raw),
                 "rendered_sha256": _sha256(rendered_bytes),
                 "cache": {"article_pages_loaded": article_pages_loaded, "unique_page_snapshots": len(page_cache)},
@@ -792,7 +797,7 @@ class TaogubaBrowser:
                          "unresolved" if detail.context.image_placeholder else
                          "present" if detail.context.image_urls else "none"
                      )}
-                    for detail in details
+                    for detail in curation.details
                 ], "assets": asset_manifest,
             }
             (archive_dir / "metadata.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")

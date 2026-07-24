@@ -37,12 +37,18 @@ SHUO_URL = "https://shuo.tgb.cn/shuo/toViewShuo?shuoID=2079570335635705862"
 LATEST_REPLIES_HTML = """
 <html><body><h1>测试作者的博客</h1><section class="reply-item">
 <span>2026-07-21 22:16 跟帖了</span><span>来自：《<a href="/a/article-one">测试主帖</a>》</span>
-<a href="/a/article-one/101#101">当天跟帖 (26)</a></section></body></html>
+<a href="/a/article-one/101#101">收到 (26)</a></section>
+<section class="reply-item"><span>2026-07-21 22:17 跟帖了</span>
+<span>来自：《<a href="/a/article-one">测试主帖</a>》</span>
+<a href="/a/article-one/102#102">当天跟帖 (27)</a></section>
+<section class="reply-item"><span>2026-07-21 22:18 跟帖了</span>
+<span>来自：《<a href="/a/article-one">测试主帖</a>》</span>
+<a href="/a/article-one/103#103">当天跟帖 (28)</a></section></body></html>
 """
 
 REPLY_DETAIL_HTML = """
-<html><body><div class="comment-data" data-comment-id="101">
-<div class="comment-data-text"><p>当天跟帖</p><img data-original="https://image.tgb.cn/reply.png"></div>
+<html><body><div class="comment-data" data-comment-id="{comment_id}">
+<div class="comment-data-text"><p>{text}</p><img data-original="https://image.tgb.cn/reply.png"></div>
 <div class="comment-data-reply"><a href="/blog/99">提问用户</a><time>2026-07-21 21:59</time><p>关联原话。</p></div>
 </div></body></html>
 """
@@ -116,7 +122,16 @@ class LatestRepliesPage:
 
     def goto(self, url, **_kwargs):
         self.url = url
-        self._content = LATEST_REPLIES_HTML if "moreReplyMod" in url else REPLY_DETAIL_HTML
+        if "moreReplyMod" in url:
+            self._content = LATEST_REPLIES_HTML
+        else:
+            self._content = "".join(
+                REPLY_DETAIL_HTML.format(
+                    comment_id=comment_id,
+                    text="收到" if comment_id == "101" else "当天跟帖",
+                )
+                for comment_id in ("101", "102", "103")
+            )
         return FakeResponse()
 
     def wait_for_timeout(self, _milliseconds):
@@ -417,12 +432,18 @@ class BrowserExportTests(unittest.TestCase):
             )
 
             self.assertTrue(result.complete)
-            self.assertEqual(result.reply_count, 1)
+            self.assertEqual(result.reply_count, 3)
             html = (result.archive_dir / "daily-replies.html").read_text(encoding="utf-8")
             metadata = json.loads((result.archive_dir / "metadata.json").read_text(encoding="utf-8"))
             self.assertIn("关联原话。", html)
             self.assertIn('src="images/', html)
+            self.assertIn("原始 3 条 · 自动筛除 2 条 · 当前保留 1 条", html)
+            self.assertIn('data-original-count="3"', html)
             self.assertEqual(metadata["target_date"], "2026-07-21")
+            self.assertEqual(metadata["original_reply_count"], 3)
+            self.assertEqual(metadata["automatic_filtered_count"], 2)
+            self.assertEqual(metadata["retained_reply_count"], 1)
+            self.assertEqual(len(metadata["replies"]), 1)
             self.assertNotIn("cookie", json.dumps(metadata).lower())
 
     def test_marks_a_failed_reply_feed_response_incomplete_and_keeps_diagnostics(self):
@@ -475,7 +496,7 @@ class BrowserExportTests(unittest.TestCase):
             )
 
             self.assertTrue(result.complete)
-            self.assertEqual(result.reply_count, 1)
+            self.assertEqual(result.reply_count, 3)
 
     def test_markdown_only_keeps_traceability_files_and_safe_metadata(self):
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -156,13 +156,13 @@ class LatestReplyFeedTests(unittest.TestCase):
         )
 
         html = render_daily_replies_html(
-            "测试作者", "2026-07-21", [detail], {"https://www.tgb.cn/image/reply.png": "images/01.png"}
+            "测试作者", "2026-07-21", curate_daily_replies([detail]), {"https://www.tgb.cn/image/reply.png": "images/01.png"}
         )
 
         self.assertIn("测试作者 · 2026-07-21 跟帖整理", html)
         self.assertIn("这是被回复的原话。", html)
         self.assertIn('src="images/01.png"', html)
-        self.assertNotIn("data-original", html)
+        self.assertNotIn('data-original="', html)
         self.assertIn('class="timeline-item"', html)
         self.assertIn('class="timeline-rail"', html)
         self.assertIn('class="timeline-content"', html)
@@ -182,7 +182,7 @@ class LatestReplyFeedTests(unittest.TestCase):
         )
 
         html = render_daily_replies_html(
-            "测试作者", "2026-07-21", [detail],
+            "测试作者", "2026-07-21", curate_daily_replies([detail]),
             {"https://www.tgb.cn/image/reply.png": "images/01.png"},
         )
 
@@ -210,7 +210,7 @@ class LatestReplyFeedTests(unittest.TestCase):
 
         self.assertEqual(recovered.image_urls, ["https://image.tgb.cn/original.png"])
         html = render_daily_replies_html(
-            "测试作者", "2026-07-21", [detail.__class__(detail.entry, detail.text, detail.html, recovered, detail.image_urls)],
+            "测试作者", "2026-07-21", curate_daily_replies([detail.__class__(detail.entry, detail.text, detail.html, recovered, detail.image_urls)]),
             {"https://image.tgb.cn/original.png": "images/original.png"},
         )
         self.assertIn('src="images/original.png"', html)

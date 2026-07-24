@@ -17,6 +17,76 @@ _TRAILING_COUNT = re.compile(r"\s*\(\d+\)\s*$")
 _PICTURE_PLACEHOLDER = re.compile(r"[\[［]图片[\]］]")
 
 
+_CURATION_SCRIPT = """<script data-curation-script>
+let lastDeleted = null;
+const retainedCount = document.getElementById("retainedCount");
+const undoDelete = document.getElementById("undoDelete");
+
+function updateRetainedCount() {
+  retainedCount.textContent = String(document.querySelectorAll('.timeline-item:not([data-deleted="true"])').length);
+}
+
+function deleteReply(item) {
+  lastDeleted = item;
+  item.dataset.deleted = "true";
+  item.hidden = true;
+  undoDelete.disabled = false;
+  updateRetainedCount();
+}
+
+document.querySelectorAll(".delete-reply").forEach((button) => {
+  button.addEventListener("click", () => deleteReply(button.closest(".timeline-item")));
+});
+
+undoDelete.addEventListener("click", () => {
+  if (!lastDeleted) return;
+  lastDeleted.hidden = false;
+  delete lastDeleted.dataset.deleted;
+  lastDeleted = null;
+  undoDelete.disabled = true;
+  updateRetainedCount();
+});
+
+async function inlineImages(root) {
+  await Promise.all([...root.querySelectorAll("img")].map(async (image) => {
+    const source = image.getAttribute("src") || "";
+    if (!/^images\\/[^?#]+$/.test(source)) return;
+    try {
+      const response = await fetch(source);
+      const blob = await response.blob();
+      image.src = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+    } catch (_) {
+      // Keep the existing source when one local image cannot be embedded.
+    }
+  }));
+}
+
+async function downloadCuratedHtml() {
+  const clone = document.documentElement.cloneNode(true);
+  clone.querySelectorAll("[data-curation-control]").forEach((node) => node.remove());
+  clone.querySelectorAll('script[data-curation-script]').forEach((node) => node.remove());
+  clone.querySelectorAll('.timeline-item[data-deleted="true"]').forEach((node) => node.remove());
+  await inlineImages(clone);
+  const blob = new Blob(["<!doctype html>\\n", clone.outerHTML], {type: "text/html;charset=utf-8"});
+  const link = Object.assign(document.createElement("a"), {
+    href: URL.createObjectURL(blob),
+    download: "daily-replies-curated.html",
+  });
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(link.href), 0);
+}
+
+document.getElementById("downloadCuratedHtml").addEventListener("click", downloadCuratedHtml);
+</script>"""
+
+
 @dataclass(frozen=True)
 class LatestReplyEntry:
     published_at: str
@@ -394,16 +464,17 @@ def render_daily_replies_html(
                 f"<div class=\"context-meta\">{escape(context_meta)}</div>{context_body}</aside>"
             )
         cards.append(
-            f"<article class=\"timeline-item\"><div class=\"timeline-rail\">"
+            f"<article class=\"timeline-item\" data-reply-url=\"{escape(entry.reply_url, quote=True)}\"><div class=\"timeline-rail\">"
             f"<time>{escape(time_label)}</time><span class=\"timeline-node\"></span></div>"
             f"<div class=\"timeline-content\"><header class=\"reply-meta\">"
             f"<a href=\"{escape(entry.article_url, quote=True)}\" target=\"_blank\" rel=\"noreferrer\">{escape(entry.article_title)}</a>"
             f"<a class=\"source\" href=\"{escape(entry.reply_url, quote=True)}\" target=\"_blank\" rel=\"noreferrer\">原帖定位</a>"
+            f"<button class=\"delete-reply\" type=\"button\" data-curation-control>删除</button>"
             f"</header><section class=\"reply-body\">{body}</section>{context}</div></article>"
         )
     empty = "<p class=\"empty\">该日期没有符合条件的跟帖。</p>" if not cards else ""
     return f"""<!doctype html>
 <html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">
 <title>{safe_author} · {escape(date)} 跟帖整理</title><style>
-:root{{--page:#f5f7fb;--surface:#fff;--ink:#172033;--muted:#64748b;--line:#dce3ed;--brand:#0f766e;--quote:#eefbf8}}*{{box-sizing:border-box}}body{{margin:0;background:var(--page);color:var(--ink);font:15px/1.72 system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif}}main{{width:min(100% - 48px,1440px);margin:24px auto 48px}}header.page{{padding:24px 30px;background:var(--surface);border:1px solid var(--line);border-top:4px solid var(--brand);border-radius:14px}}h1{{margin:0;font-size:clamp(24px,3vw,34px);letter-spacing:-.02em}}.summary{{margin:8px 0 0;color:var(--muted)}}a{{color:var(--brand);text-decoration:none}}a:hover{{text-decoration:underline}}.timeline-item{{display:grid;grid-template-columns:88px minmax(0,1fr);gap:0}}.timeline-rail{{position:relative;padding:20px 20px 0 0;text-align:right;color:var(--muted);font-size:13px;font-variant-numeric:tabular-nums}}.timeline-rail:after{{content:"";position:absolute;right:0;top:38px;bottom:-1px;width:1px;background:var(--line)}}.timeline-node{{position:absolute;right:-5px;top:24px;width:10px;height:10px;border:2px solid var(--page);border-radius:50%;background:var(--brand)}}.timeline-content{{min-width:0;padding:18px 0 22px 30px;border-bottom:1px solid var(--line)}}.reply-meta{{display:flex;flex-wrap:wrap;gap:4px 14px;align-items:center;color:var(--muted);font-size:13px}}.reply-meta>a:first-child{{font-weight:680}}.source{{margin-left:auto;font-size:12px}}.reply-body{{margin-top:10px;overflow-wrap:anywhere}}.reply-body p,.context p{{margin:0 0 .75em}}.reply-body>:last-child,.context>:last-child{{margin-bottom:0}}img{{display:block;max-width:100%;height:auto;margin:12px 0;border-radius:8px}}.context{{margin-top:14px;padding:10px 14px;border-left:3px solid #2dd4bf;background:var(--quote);font-size:14px}}.label{{margin:0;color:var(--brand);font-size:12px;font-weight:750}}.context-meta{{margin:1px 0 7px;color:var(--muted);font-size:12px}}.empty{{margin:18px 0;padding:22px 30px;background:#fff;border:1px solid var(--line);border-radius:12px;color:var(--muted)}}@media(max-width:720px){{main{{width:min(100% - 24px,1440px);margin:12px auto 28px}}header.page{{padding:20px}}.timeline-item{{grid-template-columns:60px minmax(0,1fr)}}.timeline-rail{{padding-right:15px}}.timeline-content{{padding-left:20px}}.source{{margin-left:0}}}}
-</style></head><body><main><header class=\"page\"><h1>{safe_author} · {escape(date)} 跟帖整理</h1><p class=\"summary\" data-original-count=\"{curation.original_count}\" data-automatic-filtered-count=\"{curation.automatic_filtered_count}\">原始 {curation.original_count} 条 · 自动筛除 {curation.automatic_filtered_count} 条 · 当前保留 {len(curation.details)} 条</p></header>{empty}{''.join(cards)}</main></body></html>"""
+:root{{--page:#f5f7fb;--surface:#fff;--ink:#172033;--muted:#64748b;--line:#dce3ed;--brand:#0f766e;--quote:#eefbf8}}*{{box-sizing:border-box}}body{{margin:0;background:var(--page);color:var(--ink);font:15px/1.72 system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif}}main{{width:min(100% - 48px,1440px);margin:24px auto 48px}}header.page{{padding:24px 30px;background:var(--surface);border:1px solid var(--line);border-top:4px solid var(--brand);border-radius:14px}}h1{{margin:0;font-size:clamp(24px,3vw,34px);letter-spacing:-.02em}}.summary{{margin:8px 0 0;color:var(--muted)}}.curation-actions{{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}}.curation-actions button,.delete-reply{{border:1px solid var(--line);border-radius:7px;background:#fff;color:var(--muted);font:inherit;font-size:12px;line-height:1.5;padding:3px 9px;cursor:pointer}}.curation-actions button:hover,.delete-reply:hover{{border-color:var(--brand);color:var(--brand)}}.curation-actions button:disabled{{cursor:default;opacity:.55}}.delete-reply{{margin-left:2px}}a{{color:var(--brand);text-decoration:none}}a:hover{{text-decoration:underline}}.timeline-item{{display:grid;grid-template-columns:88px minmax(0,1fr);gap:0}}.timeline-rail{{position:relative;padding:20px 20px 0 0;text-align:right;color:var(--muted);font-size:13px;font-variant-numeric:tabular-nums}}.timeline-rail:after{{content:"";position:absolute;right:0;top:38px;bottom:-1px;width:1px;background:var(--line)}}.timeline-node{{position:absolute;right:-5px;top:24px;width:10px;height:10px;border:2px solid var(--page);border-radius:50%;background:var(--brand)}}.timeline-content{{min-width:0;padding:18px 0 22px 30px;border-bottom:1px solid var(--line)}}.reply-meta{{display:flex;flex-wrap:wrap;gap:4px 14px;align-items:center;color:var(--muted);font-size:13px}}.reply-meta>a:first-child{{font-weight:680}}.source{{margin-left:auto;font-size:12px}}.reply-body{{margin-top:10px;overflow-wrap:anywhere}}.reply-body p,.context p{{margin:0 0 .75em}}.reply-body>:last-child,.context>:last-child{{margin-bottom:0}}img{{display:block;max-width:100%;height:auto;margin:12px 0;border-radius:8px}}.context{{margin-top:14px;padding:10px 14px;border-left:3px solid #2dd4bf;background:var(--quote);font-size:14px}}.label{{margin:0;color:var(--brand);font-size:12px;font-weight:750}}.context-meta{{margin:1px 0 7px;color:var(--muted);font-size:12px}}.empty{{margin:18px 0;padding:22px 30px;background:#fff;border:1px solid var(--line);border-radius:12px;color:var(--muted)}}@media(max-width:720px){{main{{width:min(100% - 24px,1440px);margin:12px auto 28px}}header.page{{padding:20px}}.timeline-item{{grid-template-columns:60px minmax(0,1fr)}}.timeline-rail{{padding-right:15px}}.timeline-content{{padding-left:20px}}.source{{margin-left:0}}}}
+</style></head><body><main><header class=\"page\"><h1>{safe_author} · {escape(date)} 跟帖整理</h1><p class=\"summary\" data-original-count=\"{curation.original_count}\" data-automatic-filtered-count=\"{curation.automatic_filtered_count}\">原始 {curation.original_count} 条 · 自动筛除 {curation.automatic_filtered_count} 条 · 当前保留 <span id=\"retainedCount\">{len(curation.details)}</span> 条</p><div class=\"curation-actions\" data-curation-control><button id=\"undoDelete\" type=\"button\" disabled>撤销最近删除</button><button id=\"downloadCuratedHtml\" type=\"button\">下载精简 HTML</button></div></header>{empty}{''.join(cards)}</main>{_CURATION_SCRIPT}</body></html>"""

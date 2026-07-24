@@ -169,6 +169,13 @@ class LatestReplyFeedTests(unittest.TestCase):
         self.assertIn(">22:16<", html)
         self.assertIn("width:min(100% - 48px,1440px)", html)
         self.assertIn("@media(max-width:720px)", html)
+        self.assertIn('class="delete-reply"', html)
+        self.assertIn('id="undoDelete"', html)
+        self.assertIn('id="downloadCuratedHtml"', html)
+        self.assertIn('data-curation-control', html)
+        self.assertIn('data-reply-url="https://www.tgb.cn/a/article-one/101#101"', html)
+        self.assertIn("async function inlineImages", html)
+        self.assertIn('querySelectorAll("[data-curation-control]")', html)
 
     def test_renders_context_author_and_time_only_in_the_summary_line(self):
         entry = parse_latest_reply_feed(

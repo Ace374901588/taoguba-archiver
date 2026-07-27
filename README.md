@@ -80,7 +80,10 @@ The workspace also accepts one explicit personal “最新跟帖” page URL and
 pagination once it reaches older entries, filters strictly by each reply's timestamp, and creates a
 separate `daily-replies.html`. It keeps target replies and their direct context; when Taoguba turns a
 quoted image into `［图片］`, it looks only through the same source article's comment pages to recover
-that image.
+that image. The generated reader removes only obvious acknowledgements and immediately repeated
+replies; uncertain content remains. You can delete individual items, undo the most recent deletion,
+then download a compact standalone HTML file with retained local images embedded. This does not
+modify the original archive.
 
 ## CLI 使用（中文）
 
@@ -151,6 +154,10 @@ taoguba-archiver `
 缓存页面；仅在引用显示为 `［图片］` 时，才在这篇主帖的已有分页中回溯原评论图片。最新跟帖模式
 需要有界面 Chrome（淘股吧会拒绝无界面请求）。若页面响应异常、登录失效或有目标跟帖未定位到，
 仍会保留 `response.html`、`rendered.html` 和 `metadata.json`，并标记为不完整。
+
+生成的阅读页只会自动筛除明确的寒暄和紧邻重复跟帖；无法判断是否有信息价值的内容一律保留。你可在
+页面中逐条删除、撤销最近一次删除，再点击“下载精简 HTML”生成只包含当前保留项的单文件版本。该下载
+会内嵌归档 `images/` 中的本地图片，不会修改原始归档，也不会请求远程图片。
 
 归档一条明确提供的淘股吧说说：
 
